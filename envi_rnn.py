@@ -15,12 +15,12 @@ import re #regex for parsing layer strings when loading models
 SHOW_PLOTS = True
 
 USE_PAST = True
-PAST_SAMPLES = 10 #ignored if USE_PAST is false. past minutes = 2*PAST_SAMPLES
+PAST_SAMPLES = 15 #ignored if USE_PAST is false. past minutes = 2*PAST_SAMPLES
 HIDDEN_DIM = 10
 N_LAYERS = 3
 
 EPOCHS = 50000
-FULL_BATCH = True
+FULL_BATCH = False
 BATCH_SIZE = 100 #overridden if FULL_BATCH
 LEARNING_RATE = 0.00005
 TRAIN_RATIO = 0.75 #ratio of data that is used for training (vs testing)
@@ -137,9 +137,12 @@ for i in range(PAST_SAMPLES*2,N_env):
         for j in range(PAST_SAMPLES):
             X_full[x_i,j,:] = env_data[i-PAST_SAMPLES+j]
         x_i +=1
+border = int(N_full*TRAIN_RATIO) #cutoff index separating training and test data
 
 valid_timestamps = np.concatenate((times[PAST_SAMPLES*2:N_january], times[N_january+PAST_SAMPLES:]))
-border = int(N_full*TRAIN_RATIO) #cutoff index separating training and test data
+train_timestamps = valid_timestamps[0:border]
+test_timestamps = valid_timestamps[border:]
+
 X_train = X_full[0:border,:,:]
 X_test = X_full[border:,:,:]
 
@@ -155,6 +158,7 @@ assert(len(y_full) == len(X_full))
 
 # ========= TRAINING ===========
 def train():
+    global BATCH_SIZE
     network = RNN(ENV_SIZE, WF_SIZE, HIDDEN_DIM, N_LAYERS) #instantiate network
     network.double().cuda()
     optimizer = torch.optim.Adam(network.parameters(), lr=LEARNING_RATE) #use ADAM for optimization
@@ -300,24 +304,25 @@ def test(net = None):
     plt.figure()
     max_i = np.argmax(cc_test)
     env = X_full[max_i,-1,:]
-    plt.plot(y_full[max_i,:], label="Measured")
-    plt.plot(y_full[max_i,:], label="Predicted")
+    plt.plot(y_test[max_i,:], label="Measured")
+    plt.plot(test_results[max_i,:], label="Predicted")
     plt.legend()
     plt.ylabel("Magnitude")
     plt.xlabel("Sample")
-    plt.title("Best Testing Set Pair, i={:d}\nCC: {:4f}\nIll.: {:3f}, degF: {:2f}, RH: {:2f}\nt: {:f}".format(max_i,cc_test[max_i],env[0],env[1],env[2],valid_timestamps[max_i]))
+    format_str = "i={:d}\nCC: {:.4f}\nIll.: {:.3f}, degF: {:.2f}, RH: {:.2f}\nt: {:f}"
+    plt.title("Best Testing Set Pair, "+format_str.format(max_i,cc_test[max_i],env[0],env[1],env[2],test_timestamps[max_i]))
     plt.tight_layout()
     #TODO change this to plot the predicted wf
     #plot worst pair of waveforms side by side
     plt.figure()
     min_i = np.argmin(cc_test)
     env = X_full[min_i,-1,:]
-    plt.plot(y_full[min_i,:], label="Measured")
-    plt.plot(y_full[min_i,:], label="Predicted")
+    plt.plot(y_test[min_i,:], label="Measured")
+    plt.plot(test_results[min_i,:], label="Predicted")
     plt.legend()
     plt.ylabel("Magnitude")
     plt.xlabel("Sample")
-    plt.title("Worst Testing Set Pair, i={:d}\nCC: {:4f}\nIll.: {:3f}, degF: {:2f}, RH: {:2f}\nt: {:f}".format(min_i,cc_test[min_i],env[0],env[1],env[2],valid_timestamps[min_i]))
+    plt.title("Worst Testing Set Pair, "+format_str.format(min_i,cc_test[min_i],env[0],env[1],env[2],test_timestamps[min_i]))
     plt.tight_layout()
     
     #show all plots
