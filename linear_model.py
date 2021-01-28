@@ -100,8 +100,8 @@ summer_test_segment = np.arange(36359-int(N_summer*TEST_RATIO),36359)
 #winter start: 2463 for temp, 1625 for rh
 #summer end: 36359
 
-#test_indices = np.concatenate((winter_test_segment,summer_test_segment))
-test_indices = full_indices[int(N_env*TRAIN_RATIO):]
+test_indices = np.concatenate((winter_test_segment,summer_test_segment))
+#test_indices = full_indices[int(N_env*TRAIN_RATIO):]
 train_indices = np.setdiff1d(full_indices,test_indices,assume_unique=True)
 
 winter_train_segment = np.setdiff1d(train_indices, range(N_winter,N_env))
@@ -131,12 +131,12 @@ desc_str = "linear_model_TR_"+str(int(TRAIN_RATIO*100))
 M = np.linalg.pinv(x_train) @ y_train
 
 lp_full = x_full @ M
-l_cc = np.zeros(N_test+N_train)
+p_cc = np.zeros(N_test+N_train)
 for i in range(N_full):
-    l_cc[i] = np.corrcoef(y_full[i], lp_full[i])[0,1]
+    p_cc[i] = np.corrcoef(y_full[i], lp_full[i])[0,1]
 plt.figure()
-plt.plot(train_indices, l_cc[train_indices],label="Training")
-plt.plot(test_indices, l_cc[test_indices],label="Testing")
+plt.plot(train_indices, p_cc[train_indices],label="Training")
+plt.plot(test_indices, p_cc[test_indices],label="Testing")
 plt.plot(env_data[:,0]/max(env_data[:,0]), alpha=0.5, label="Illuminance")
 plt.title("Linear Model Prediction CC")
 plt.ylim((0,1))
@@ -154,11 +154,11 @@ fig,ax1 = plt.subplots()
 #plot training
 train_segments = np.split(train_indices,np.where(np.diff(train_indices)!=1)[0]+1)
 for seg in train_segments:
-    lt1, = ax1.plot(seg,l_cc[seg], label="Training CC",color="C0",lw=lw)
+    lt1, = ax1.plot(seg,p_cc[seg], label="Training CC",color="C0",lw=lw)
 #plot testing
 test_segments = np.split(test_indices,np.where(np.diff(test_indices)!=1)[0]+1)
 for seg in test_segments:
-    lt2, = ax1.plot(seg, l_cc[seg], label="Testing CC",color="C1",lw=lw)
+    lt2, = ax1.plot(seg, p_cc[seg], label="Testing CC",color="C1",lw=lw)
 
 ax1.set_ylabel("CC")
 ax1.set_xlabel("Sample")
@@ -173,7 +173,7 @@ ax2.fill_between(range(N_full),norm_illuminance,np.ones(N_full)*np.min(norm_illu
 ax2.set_ylabel("Log10 Illuminance (log Lux)")
 #ax2.legend(loc="lower right")
 plt.legend((lt1,lt2,li),("Training CC","Testing CC","Illuminance"),loc="lower left")
-plt.title("Zoomed Linear Model Prediction CC\nTrain mean CC: {:.4f}\n Test mean CC: {:.4f}".format(np.mean(l_cc[train_indices]), np.mean(l_cc[test_indices])))
+plt.title("Zoomed Linear Model Prediction CC\nTrain mean CC: {:.4f}\n Test mean CC: {:.4f}".format(np.mean(p_cc[train_indices]), np.mean(p_cc[test_indices])))
 plt.tight_layout()
 plt.savefig("plots/"+desc_str+"_cc_full_zoomed")
 
@@ -243,14 +243,14 @@ for i in range(skipped_measurements-1,N_full):
     l_adv_cc[i] = np.corrcoef(y_full[i], l_adv_predictions_full[i])[0,1]
 
 plt.figure()
-plt.plot(l_cc, lw=1, label="Without Past Data")
+plt.plot(p_cc, lw=1, label="Without Past Data")
 valid_adv_cc = l_adv_cc[skipped_measurements-1:]
 plt.plot(range(skipped_measurements-1,N_full),valid_adv_cc,lw=1,label="With Past Data")
 #ylims = plt.ylim()
 #plt.plot([border, border], [-0.5, 1.5],"r:",lw=1,label="Training Cutoff")
 #plt.ylim(ylims)
 #plt.plot(env_data[:,0]/max(env_data[:,0]), alpha=0.5, label="Illuminance")
-plt.title("Linear Model Prediction CC, Using {:d} Minutes of Data\nMean w/o past data:  {:.4f}\nMean with past data: {:.4f}".format(PAST_MEASUREMENTS*2,np.mean(l_cc), np.mean(valid_adv_cc)))
+plt.title("Linear Model Prediction CC, Using {:d} Minutes of Data\nMean w/o past data:  {:.4f}\nMean with past data: {:.4f}".format(PAST_MEASUREMENTS*2,np.mean(p_cc), np.mean(valid_adv_cc)))
 plt.ylabel("CC")
 plt.xlabel("Sample")
 plt.legend()
