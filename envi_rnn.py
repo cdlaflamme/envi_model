@@ -173,6 +173,8 @@ assert(len(y_full) == len(X_full))
 
 # ========= TRAINING ===========
 def train():
+    X_full_tensor = torch.from_numpy(X_full).view(-1,PAST_SAMPLES,ENV_SIZE).double().cuda()
+    y_full_tensor = torch.from_numpy(y_full).view(-1,WF_SIZE).double().cuda()
     global BATCH_SIZE
     network = RNN(ENV_SIZE, WF_SIZE, HIDDEN_DIM, N_LAYERS) #instantiate network
     network.double().cuda()
@@ -188,17 +190,19 @@ def train():
     for epoch in range(EPOCHS):
         #shuffle order of training data
         random.shuffle(train_indices_s)
-        X_train_s = X_full[train_indices_s]
-        y_train_s = y_full[train_indices_s]
+        X_train_s = X_full_tensor[train_indices_s]
+        y_train_s = y_full_tensor[train_indices_s]
         for b in range(batches):
             #for each batch
             #get batch of input data
-            b_data = X_train_s[b*BATCH_SIZE:min(N_train, (b+1)*BATCH_SIZE)]
-            b_x = torch.from_numpy(b_data).view(-1,PAST_SAMPLES,ENV_SIZE).double().cuda() #batch_size by 3 tensor
+            #b_data = X_train_s[b*BATCH_SIZE:min(N_train, (b+1)*BATCH_SIZE)]
+            #b_x = torch.from_numpy(b_data).view(-1,PAST_SAMPLES,ENV_SIZE).double().cuda() #batch_size by 3 tensor
+            b_x = X_train_s[b*BATCH_SIZE:min(N_train, (b+1)*BATCH_SIZE)]
             
             #get batch of desired data
-            b_desired = y_train_s[b*BATCH_SIZE:min(N_train, (b+1)*BATCH_SIZE)]
-            b_y = torch.from_numpy(b_desired).view(-1,WF_SIZE).double().cuda() #batch size by 92 tensor
+            #b_desired = y_train_s[b*BATCH_SIZE:min(N_train, (b+1)*BATCH_SIZE)]
+            #b_y = torch.from_numpy(b_desired).view(-1,WF_SIZE).double().cuda() #batch size by 92 tensor
+            b_y = y_train_s[b*BATCH_SIZE:min(N_train, (b+1)*BATCH_SIZE)]
             
             #predict
             #for p in range(PAST_SAMPLES):        
