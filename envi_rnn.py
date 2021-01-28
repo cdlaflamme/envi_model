@@ -249,14 +249,14 @@ def test(net = None):
         
     #full correlation plot with illuminance
     plt.figure()
-    plt.plot(np.arange(N_train), cc_train,label="Training CC")
-    plt.plot(np.arange(N_train, N_test+N_train), cc_test,label="Testing CC")
+    plt.plot(np.arange(N_train), cc_train,label="Training CC",lw=1)
+    plt.plot(np.arange(N_train, N_test+N_train), cc_test,label="Testing CC",lw=1)
     ylims = (0,1)
     plt.ylim((0,1))
     norm_illuminance = np.array(env_data[:,0]) #TODO use train_indices and test_indices here??
     norm_illuminance = norm_illuminance/max(norm_illuminance)*(ylims[1]-ylims[0])+ylims[0]
-    plt.plot(norm_illuminance,label="Illuminance",alpha=0.5)
-    plt.fill_between(range(N_env),norm_illuminance,np.ones(N_env)*np.min(norm_illuminance), alpha=0.3, color="C2")
+    plt.plot(norm_illuminance,label="Illuminance",alpha=0.3,lw=1)
+    plt.fill_between(range(N_env),norm_illuminance,np.ones(N_env)*np.min(norm_illuminance), alpha=0.2, color="C2")
     plt.title("Prediction Corr. Coeffs\n"+desc_str+'\nAverage C.C.: {:.3f}'.format(np.mean(np.concatenate((cc_test,cc_train)))))
     plt.ylabel("CC")
     plt.xlabel("Sample")
@@ -265,7 +265,7 @@ def test(net = None):
     plt.savefig("plots/"+desc_str+"_cc_full.png")
 
     #full correlation plot with illuminance, ZOOMED ON CORRELATION
-    plt.figure()
+    fig,ax1 = plt.subplots()
     #X_test_tensor = torch.from_numpy(X_test).view(-1,ENV_SIZE)
     #test_results = net(X_test_tensor).detach().numpy()
     #cc_test = np.zeros(N_test)
@@ -276,17 +276,23 @@ def test(net = None):
     #cc_train = np.zeros(N_train)
     #for i in range(N_train):
     #    cc_train[i] = np.corrcoef(y_train[i], train_results[i])[0,1]
-    plt.plot(np.arange(N_train), cc_train,label="Training CC")
-    plt.plot(np.arange(N_train, N_test+N_train), cc_test,label="Testing CC")
-    ylims = plt.ylim()
+    ltrain, = ax1.plot(np.arange(N_train), cc_train,label="Training CC",lw=1)
+    ltest, = ax1.plot(np.arange(N_train, N_test+N_train), cc_test,label="Testing CC",lw=1)
+    ylims = ax1.get_ylim()
     norm_illuminance = np.array(env_data[:,0])
-    norm_illuminance = norm_illuminance/max(norm_illuminance)*(ylims[1]-ylims[0])+ylims[0]
-    plt.fill_between(range(N_env),norm_illuminance,np.ones(N_env)*np.min(norm_illuminance), alpha=0.3, color="C2")
-    plt.plot(norm_illuminance,label="Illuminance",alpha=0.5)
-    plt.title("Zoomed Prediction Corr. Coeffs\n"+desc_str+'\nAverage C.C.: {:.3f}'.format(np.mean(np.concatenate((cc_test,cc_train)))))
-    plt.ylabel("CC")
-    plt.xlabel("Sample")
-    plt.legend()
+    #norm_illuminance = norm_illuminance/max(norm_illuminance)*(ylims[1]-ylims[0])+ylims[0]
+    print(ax1.get_ylim())
+    
+    #plt.title("Zoomed Prediction Corr. Coeffs\n"+desc_str+'\nAverage C.C.: {:.3f}'.format(np.mean(np.concatenate((cc_test,cc_train)))))
+    ax1.set_title("Zoomed LSTM Prediction CC\nTrain mean CC: {:.4f}\n Test mean CC: {:.4f}".format(np.mean(cc_train),np.mean(cc_test)))
+    ax1.set_ylabel("CC")
+    ax1.set_xlabel("Sample")
+    #ax1.legend(loc="lower left")
+    ax2 = ax1.twinx()
+    ax2.fill_between(range(N_env),norm_illuminance,np.ones(N_env)*np.min(norm_illuminance), alpha=0.2, color="C2")
+    lill, = ax2.plot(norm_illuminance,label="Illuminance",alpha=0.3,lw=1,color="C2")
+    ax2.set_ylabel("Log10 Illuminance (log Lux)")
+    plt.legend((ltrain,ltest,lill),("Training CC","Testing CC","Illuminance"),loc="lower left")
     plt.tight_layout()
     plt.savefig("plots/"+desc_str+"_cc_full_zoomed.png")
 

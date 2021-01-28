@@ -15,10 +15,11 @@ FULL_BATCH = True
 BATCH_SIZE = 64 #overridden if FULL_BATCH
 LEARNING_RATE = 0.00003
 TRAIN_RATIO = 0.75
+TEST_RATIO = 1-TRAIN_RATIO
 BIAS = True #should there be a linear bias component (i.e. an extra value of 1 in input)
 SHUFFLE = False #randomly select training data
 
-PAST_MEASUREMENTS = 50
+PAST_MEASUREMENTS = 15
 
 # ======== NETWORK DEFINITION ====
 layer_str = "lr_5e-05_ep_20000_bs_64_L_3_16_32_92_state_dict"
@@ -65,10 +66,10 @@ times = raw_data[:,0]
 N_env = len(times)
 env_data = np.zeros((N_env,ENV_SIZE))
 env_data[:,0] = np.where(raw_data[:,1]==0, 0.01, raw_data[:,1]) #replace illuminance values of 0 with 0.01: lowest nonzero value ever observed; needed for log
-env_data[:,0] = np.log10(env_data[:,0]) #log10 illuminance
+env_data[:,0] = illum = np.log10(env_data[:,0]) #log10 illuminance
 #env_data[:,0] = raw_data[1:,1] #illuminance
-env_data[:,1] = raw_data[:,3] #temperature
-env_data[:,2] = raw_data[:,4] #humidity
+env_data[:,1] = degC = (raw_data[:,3]-32)*5/9 #temperature; converted to celcius
+env_data[:,2] = RH = raw_data[:,4] #humidity
 if BIAS:
     env_data[:,3] = 1
 wfs = raw_data[:,5:]
@@ -80,15 +81,36 @@ net_env_data[:,1] = raw_data[:,3] #temperature
 net_env_data[:,2] = raw_data[:,4] #humidity
 
 #============ SPLIT DATA ==============
+N_winter = 14601
+N_summer = N_env-N_winter
 x_full = env_data
 y_full = wfs
-border = int(N_env*TRAIN_RATIO)
 full_indices = np.array(range(N_env))
+#jan_border  = int(N_winter*TEST_RATIO)
+#summer_border = int(N_winter+N_summer*TRAIN_RATIO)
+#best arrangement found so far: last winter, last summer
 
-if SHUFFLE:    
-    np.random.shuffle(full_indices)
-train_indices = full_indices[0:border]
-test_indices = full_indices[border:]
+#winter_test_segment = np.array(range(0,int(N_winter*TEST_RATIO))) #first portion of winter
+#winter_test_segment = np.array(range(int(N_winter*TRAIN_RATIO),N_winter)) #last portion of winter
+winter_test_segment = np.arange(1625,1625+int(N_winter*TEST_RATIO))
+#summer_test_segment = np.array(range(N_winter,N_winter+int(N_summer*TEST_RATIO))) #first portion of summer
+#summer_test_segment = np.array(range(int(N_winter+N_summer*TRAIN_RATIO),N_env)) #last portion of summer
+summer_test_segment = np.arange(36359-int(N_summer*TEST_RATIO),36359)
+
+#winter start: 2463 for temp, 1625 for rh
+#summer end: 36359
+
+#test_indices = np.concatenate((winter_test_segment,summer_test_segment))
+test_indices = full_indices[int(N_env*TRAIN_RATIO):]
+train_indices = np.setdiff1d(full_indices,test_indices,assume_unique=True)
+
+winter_train_segment = np.setdiff1d(train_indices, range(N_winter,N_env))
+summer_train_segment = np.setdiff1d(train_indices, range(0,N_winter))
+
+#if SHUFFLE:    
+#    np.random.shuffle(full_indices)
+#train_indices = full_indices[jan_border:summer_border]
+#test_indices = np.concatenate((full_indices[0:jan_border], full_indices[summer_border:]))
     
 x_train = x_full[train_indices]
 x_test = x_full[test_indices]
@@ -126,21 +148,72 @@ plt.savefig("plots/"+desc_str+"_cc_full")
 
 
 #zoomed
-plt.figure()
-plt.plot(train_indices,l_cc[train_indices], "|", label="Training")
-plt.plot(test_indices, l_cc[test_indices], "|", label="Testing")
-ylims = plt.ylim()
+#plt.figure()
+lw=1
+fig,ax1 = plt.subplots()
+#plot training
+train_segments = np.split(train_indices,np.where(np.diff(train_indices)!=1)[0]+1)
+for seg in train_segments:
+    lt1, = ax1.plot(seg,l_cc[seg], label="Training CC",color="C0",lw=lw)
+#plot testing
+test_segments = np.split(test_indices,np.where(np.diff(test_indices)!=1)[0]+1)
+for seg in test_segments:
+    lt2, = ax1.plot(seg, l_cc[seg], label="Testing CC",color="C1",lw=lw)
+
+ax1.set_ylabel("CC")
+ax1.set_xlabel("Sample")
+ax1.set_ylim(0.7784,1.0103)
+#ax1.legend(loc="lower left")
+#ylims = plt.ylim()
 norm_illuminance = np.array(env_data[:,0])
-norm_illuminance = norm_illuminance/max(norm_illuminance)*(ylims[1]-ylims[0])+ylims[0]
-plt.plot(norm_illuminance,label="Illuminance",alpha=0.5)
-plt.fill_between(range(N_full),norm_illuminance,np.ones(N_full)*np.min(norm_illuminance), alpha=0.3, color="C2")
+#norm_illuminance = norm_illuminance/max(norm_illuminance)*(ylims[1]-ylims[0])+ylims[0]
+ax2 = ax1.twinx()
+li, = ax2.plot(norm_illuminance,label="Illuminance",alpha=0.3, lw=1,color="C2")
+ax2.fill_between(range(N_full),norm_illuminance,np.ones(N_full)*np.min(norm_illuminance), alpha=0.2, color="C2")
+ax2.set_ylabel("Log10 Illuminance (log Lux)")
+#ax2.legend(loc="lower right")
+plt.legend((lt1,lt2,li),("Training CC","Testing CC","Illuminance"),loc="lower left")
 plt.title("Zoomed Linear Model Prediction CC\nTrain mean CC: {:.4f}\n Test mean CC: {:.4f}".format(np.mean(l_cc[train_indices]), np.mean(l_cc[test_indices])))
-plt.ylabel("CC")
-plt.xlabel("Sample")
-plt.legend()
 plt.tight_layout()
 plt.savefig("plots/"+desc_str+"_cc_full_zoomed")
 
+
+#violin plots showing environment distribution
+env_sets = (illum, degC, RH)
+colors = ("#EDB120","#A2142F","#0072BD")
+names = ("Illuminance","Temperature","Humidity")
+labels = ("Training Set","Testing Set","All Data")
+units = ("log10 Lux","Degrees C", "% Relative Humidity")
+for e,c,n,u in zip(env_sets,colors,names,units):
+    fig,ax = plt.subplots()
+    plt.title(n+" Distribution")
+    vp = plt.violinplot((e[train_indices], e[test_indices], e))
+    for body in vp['bodies']:
+        body.set_color(c)
+    for partname in ('cbars','cmins','cmaxes','cmeans','cmedians'):
+        if partname in vp.keys():
+            part = vp[partname]
+            part.set_edgecolor(c)
+            part.set_lw(1)
+    ax.get_xaxis().set_tick_params(direction='out')
+    ax.xaxis.set_ticks_position('bottom')
+    ax.set_xticks(np.arange(1, len(labels) + 1))
+    ax.set_xticklabels(labels)
+    ax.set_xlim(0.25, len(labels) + 0.75)
+    plt.ylabel(u)
+    plt.tight_layout()
+    plt.savefig("plots/"+n+"_distribution")
+
+#temperature/illuminance plot
+plt.figure()
+plt.title("Temperature and Illuminance in Measured Data")
+plt.scatter(degC,illum,marker='.',lw=0.2)
+plt.xlabel("Temperature [Degrees C]")
+plt.ylabel("Illuminance [log10 Lux]")
+plt.savefig("plots/temp_illum_comparison")
+
+#plotting variation from each factor
+#TODO
 
 #========== ADVANCED LINEAR MODEL =============
 #advanced linear model that uses past data
@@ -153,7 +226,7 @@ desc_str = "advanced_linear_model_NM_"+str(PAST_MEASUREMENTS)+"_TR_"+str(int(TRA
 X_full = np.zeros((N_full, ROW_SIZE))
 skipped_measurements = PAST_MEASUREMENTS*2
 for i in range(skipped_measurements-1, N_full): #start at PAST_MEASUREMENTS*2 bc the first (this many) samples don't have enough past data
-    if (i <= 14601):
+    if (i <= N_winter):
         #use every other past measurement as if we captured data once per two minutes instead of once per minute
         X_full[i] = x_full[i-PAST_MEASUREMENTS*2+1:i+1:2].flatten()
     else: #we actually captured data once per 2 minutes. no need to do anything special.

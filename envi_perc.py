@@ -12,10 +12,10 @@ import numpy as np
 # ======= CONSTANTS ==========
 SHOW_PLOTS = True
 
-EPOCHS = 20000
+EPOCHS = 60000
 FULL_BATCH = True
 BATCH_SIZE = 100 #overridden if FULL_BATCH
-LEARNING_RATE = 0.000001
+LEARNING_RATE = 0.000005
 TRAIN_RATIO = 0.75 #ratio of data that is used for training (vs testing)
 PRINT_PERIOD = 1000 #every X batches we print an update w/ loss & epoch number
 
@@ -82,7 +82,8 @@ if ENV_SIZE > 3:
 wfs = raw_data[1:,5:]
 
 if NORMALIZED:
-    wfs = wfs/np.max(wfs,axis=0)
+    maxes = np.max(wfs,axis=1)
+    wfs = np.array([wfs[i]/maxes[i] for i in range(N_env)])
 if PRUNED:
     wfs = wfs[:,20:]
     
