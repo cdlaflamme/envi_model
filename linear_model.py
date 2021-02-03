@@ -6,57 +6,30 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 import random
 import numpy as np
+from scipy.interpolate import interp1d
 
 from mpl_toolkits.mplot3d import Axes3D  # for 3d projection plots
 
 # ======= CONSTANTS ==========
-EPOCHS = 500000
-FULL_BATCH = True
-BATCH_SIZE = 64 #overridden if FULL_BATCH
-LEARNING_RATE = 0.00003
 TRAIN_RATIO = 0.75
 TEST_RATIO = 1-TRAIN_RATIO
 BIAS = True #should there be a linear bias component (i.e. an extra value of 1 in input)
-SHUFFLE = False #randomly select training data
+SHUFFLE = False #randomly select training data, CURRENTLY OBSOLETE
+SHOW_PLOTS = False
+INTERP_DATA = False #interpolates waveforms into a spline before solving
+INTERP_VISUAL = True #interpolates waveforms into a spline AFTER solving/simulating (if interp_data=True, this is ignored)
+NORMALIZE=True
 
 PAST_MEASUREMENTS = 15
 
-# ======== NETWORK DEFINITION ====
-layer_str = "lr_5e-05_ep_20000_bs_64_L_3_16_32_92_state_dict"
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        
-        self.net = nn.Sequential(
-            nn.Linear(3,16),
-            nn.ReLU(),
-            nn.Linear(16,32),
-            nn.ReLU(),
-            nn.Linear(32,92)
-        )
-    
-    def forward(self,x):
-        results = self.net(x)
-        return results
-
-class PNet(nn.Module):
-    def __init__(self):
-        super(PNet, self).__init__()
-        
-        self.net = nn.Sequential(
-            nn.Linear(3,16),
-            nn.ReLU(),
-            nn.Linear(16,32),
-            nn.ReLU(),
-            nn.Linear(32,92-20)
-        )
-    
-    def forward(self,x):
-        results = self.net(x)
-        return results
-
+FEET_PER_SAMPLE = 3.63716
+METERS_PER_FOOT = 0.3048
+WF_SIZE = 92
+INTERP_SIZE = 1000
 # ======= LOAD DATA ==========
 in_path = "combined_data_new.csv"
+#in_path = "combined_data_ends_1_21.csv"
+out_folder = "linear_plots"
 if (BIAS):
     ENV_SIZE = 4
 else:
@@ -65,21 +38,30 @@ raw_data = np.genfromtxt(in_path,delimiter=',',skip_header=1)
 times = raw_data[:,0]
 N_env = len(times)
 env_data = np.zeros((N_env,ENV_SIZE))
-env_data[:,0] = np.where(raw_data[:,1]==0, 0.01, raw_data[:,1]) #replace illuminance values of 0 with 0.01: lowest nonzero value ever observed; needed for log
-env_data[:,0] = illum = np.log10(env_data[:,0]) #log10 illuminance
-#env_data[:,0] = raw_data[1:,1] #illuminance
-env_data[:,1] = degC = (raw_data[:,3]-32)*5/9 #temperature; converted to celcius
-env_data[:,2] = RH = raw_data[:,4] #humidity
+
+illum_index = 0
+degC_index = 1
+RH_index = 2
+bias_index = 3
+
+env_data[:,illum_index] = np.where(raw_data[:,1]==0, 0.01, raw_data[:,1]) #replace illuminance values of 0 with 0.01: lowest nonzero value ever observed; needed for log
+env_data[:,illum_index] = illum = np.log10(env_data[:,0]) #log10 illuminance
+#env_data[:,illum_index] = raw_data[1:,1] #illuminance
+env_data[:,degC_index] = degC = (raw_data[:,3]-32)*5/9 #temperature; converted to celcius
+env_data[:,RH_index] = RH = raw_data[:,4] #humidity
 if BIAS:
-    env_data[:,3] = 1
-wfs = raw_data[:,5:]
+    env_data[:,bias_index] = 1
+wfs_raw = wfs = raw_data[:,5:]
+if NORMALIZE:
+    wf_maxes = np.max(wfs_raw,axis=1)
+    wfs = np.array([wfs_raw[i]/wf_maxes[i] for i in range(N_env)])
 wfs_p = wfs[:,20:]
 
-net_env_data = np.zeros((N_env,3))
-net_env_data[:,0] = raw_data[:,1] #illuminance
-net_env_data[:,1] = raw_data[:,3] #temperature
-net_env_data[:,2] = raw_data[:,4] #humidity
-
+if INTERP_DATA:
+    x = np.arange(WF_SIZE)
+    xx = np.linspace(0,WF_SIZE-1,INTERP_SIZE)
+    wfs = np.array([interp1d(x,wf,kind='cubic')(xx) for wf in wfs])
+    
 #============ SPLIT DATA ==============
 N_winter = 14601
 N_summer = N_env-N_winter
@@ -134,17 +116,17 @@ lp_full = x_full @ M
 p_cc = np.zeros(N_test+N_train)
 for i in range(N_full):
     p_cc[i] = np.corrcoef(y_full[i], lp_full[i])[0,1]
-plt.figure()
-plt.plot(train_indices, p_cc[train_indices],label="Training")
-plt.plot(test_indices, p_cc[test_indices],label="Testing")
-plt.plot(env_data[:,0]/max(env_data[:,0]), alpha=0.5, label="Illuminance")
-plt.title("Linear Model Prediction CC")
-plt.ylim((0,1))
-plt.ylabel("CC")
-plt.xlabel("Sample")
-plt.legend()
-plt.tight_layout()
-plt.savefig("plots/"+desc_str+"_cc_full")
+#plt.figure()
+#plt.plot(train_indices, p_cc[train_indices],label="Training")
+#plt.plot(test_indices, p_cc[test_indices],label="Testing")
+#plt.plot(env_data[:,0]/max(env_data[:,0]), alpha=0.5, label="Illuminance")
+#plt.title("Linear Model Prediction CC")
+#plt.ylim((0,1))
+#plt.ylabel("CC")
+#plt.xlabel("Sample")
+#plt.legend()
+#plt.tight_layout()
+#plt.savefig("{:s}/{:s}_cc_full".format(out_folder,desc_str))
 
 
 #zoomed
@@ -162,21 +144,16 @@ for seg in test_segments:
 
 ax1.set_ylabel("CC")
 ax1.set_xlabel("Sample")
-ax1.set_ylim(0.8125,1.0085)
-#ax1.legend(loc="lower left")
-#ylims = plt.ylim()
-norm_illuminance = np.array(env_data[:,0])
-#norm_illuminance = norm_illuminance/max(norm_illuminance)*(ylims[1]-ylims[0])+ylims[0]
 ax2 = ax1.twinx()
-li, = ax2.plot(norm_illuminance,label="Illuminance",alpha=0.3, lw=1,color="C2")
-ax2.fill_between(range(N_full),norm_illuminance,np.ones(N_full)*np.min(norm_illuminance), alpha=0.2, color="C2")
+li, = ax2.plot(illum,label="Illuminance",alpha=0.3, lw=1,color="C2")
+ax2.fill_between(range(N_full),illum,np.ones(N_full)*np.min(illum), alpha=0.2, color="C2")
 ax2.set_ylabel("Log10 Illuminance (log Lux)")
-#ax2.legend(loc="lower right")
 plt.legend((lt1,lt2,li),("Training CC","Testing CC","Illuminance"),loc="lower left")
-plt.title("Zoomed Linear Model Prediction CC\nTrain mean CC: {:.4f}\n Test mean CC: {:.4f}".format(np.mean(p_cc[train_indices]), np.mean(p_cc[test_indices])))
+plt.title("Linear Model Prediction CC\nTrain mean CC: {:.4f}\n Test mean CC: {:.4f}".format(np.mean(p_cc[train_indices]), np.mean(p_cc[test_indices])))
 plt.tight_layout()
-plt.savefig("plots/"+desc_str+"_cc_full_zoomed")
-
+plt.savefig("{:s}/{:s}_cc_full".format(out_folder,desc_str))
+ax1.set_ylim((0,1))
+plt.savefig("{:s}/{:s}_cc_full_zoomed".format(out_folder,desc_str))
 
 #violin plots showing environment distribution
 env_sets = (illum, degC, RH)
@@ -202,7 +179,7 @@ for e,c,n,u in zip(env_sets,colors,names,units):
     ax.set_xlim(0.25, len(labels) + 0.75)
     plt.ylabel(u)
     plt.tight_layout()
-    plt.savefig("plots/"+n+"_distribution")
+    plt.savefig("{:s}/distribution_{:s}".format(out_folder,n.lower()))
 
 #temperature/illuminance plot
 plt.figure()
@@ -210,12 +187,79 @@ plt.title("Temperature and Illuminance in Measured Data")
 plt.scatter(degC,illum,marker='.',lw=0.2)
 plt.xlabel("Temperature [Degrees C]")
 plt.ylabel("Illuminance [log10 Lux]")
-plt.savefig("plots/temp_illum_comparison")
+plt.savefig("{:s}/temp_illum_comparison".format(out_folder))
 
-#plotting variation from each factor
-#TODO
+#=========== plotting variation from each factor ====================
+N_simulations = 10000 #number of waveforms to generate for each factor (varied factor sampled uniformly at this many points across measured range)
 
-#========== ADVANCED LINEAR MODEL =============
+#find mode daytime illuminance
+illum_counts, illum_centers = np.histogram(illum)
+illum_mode_bin_i = np.argmax(illum_counts)
+illum_mode = illum_centers[illum_mode_bin_i]
+
+#find mode temperature
+degC_counts, degC_centers = np.histogram(degC)
+degC_mode_bin_i = np.argmax(degC_counts)
+degC_mode = degC_centers[degC_mode_bin_i]
+
+#find mode humidity
+RH_counts, RH_centers = np.histogram(RH)
+RH_mode_bin_i = np.argmax(RH_counts)
+RH_mode = RH_centers[RH_mode_bin_i]
+
+#Illuminance: fix temperature and humidity
+illum_I = np.ones((N_simulations,ENV_SIZE))
+illum_I[:,illum_index] = np.linspace(np.min(illum),np.max(illum),N_simulations);
+illum_I[:,degC_index] = degC_mode
+illum_I[:,RH_index] = RH_mode
+illum_Y = illum_I@M
+
+degC_I = np.ones((N_simulations,ENV_SIZE))
+degC_I[:,illum_index] = illum_mode
+degC_I[:,degC_index] = np.linspace(np.min(degC),np.max(degC),N_simulations);
+degC_I[:,RH_index] = RH_mode
+degC_Y = degC_I@M
+
+RH_I = np.ones((N_simulations,ENV_SIZE))
+RH_I[:,illum_index] = illum_mode
+RH_I[:,degC_index] = degC_mode
+RH_I[:,RH_index] = np.linspace(np.min(RH),np.max(RH),N_simulations);
+RH_Y = RH_I @ M
+
+if INTERP_VISUAL and not INTERP_DATA:
+    x = np.arange(WF_SIZE)
+    xx = np.linspace(0,WF_SIZE-1,INTERP_SIZE)
+    illum_Y = np.array([interp1d(x,wf,kind='cubic')(xx) for wf in illum_Y])
+    degC_Y  = np.array([interp1d(x,wf,kind='cubic')(xx) for wf in degC_Y])
+    RH_Y    = np.array([interp1d(x,wf,kind='cubic')(xx) for wf in RH_Y])
+
+#each plot will share the same code. extra initial investment, but reduces headaches later.
+mode_strings = ("Illuminance: 10^{:.2f} Lux".format(illum_mode), "Temperature: {:.2f} C".format(degC_mode), "Humidity: {:.2f} %".format(RH_mode))
+lw = 1
+for i,(name,Y) in enumerate(zip(("Illuminance","Temperature","Humidity"),(illum_Y,degC_Y,RH_Y))):
+    used_m_strings = [m for j,m in enumerate(mode_strings) if i!=j]
+    fig,ax1 = plt.subplots()
+    ax1.set_title("Variation Due to {:s}\n{:s}\n{:s}".format(name,used_m_strings[0],used_m_strings[1]))
+    ax1.set_xlabel("Distance (meters)")
+    ax1.set_ylabel("Normalized SSTDR Magnitude")
+    std_devs = np.std(Y,axis=0)
+    if INTERP_DATA or INTERP_VISUAL:
+        meters = np.arange(INTERP_SIZE)*FEET_PER_SAMPLE*WF_SIZE/INTERP_SIZE*METERS_PER_FOOT
+    else:
+        meters = np.arange(WF_SIZE)*FEET_PER_SAMPLE*METERS_PER_FOOT
+    mean = np.mean(Y,axis=0)
+    upper = mean+2*std_devs
+    lower = mean-2*std_devs
+    mean_l,  = ax1.plot(meters,  mean,lw=lw,label="Simulated Mean")
+    upper_l, = ax1.plot(meters, upper,lw=lw,label="Upper Bound")
+    lower_l, = ax1.plot(meters, lower,lw=lw,label="Lower Bound")
+    ax1.fill_between(x=meters,y1=upper,y2=lower,alpha=0.3)
+    ax1.legend()
+    plt.savefig("{:s}/variation_{:s}.png".format(out_folder,name.lower()))
+
+
+
+#========== PAST-INFORMED LINEAR MODEL =============
 #advanced linear model that uses past data
 ROW_SIZE = PAST_MEASUREMENTS*ENV_SIZE
 desc_str = "advanced_linear_model_NM_"+str(PAST_MEASUREMENTS)+"_TR_"+str(int(TRAIN_RATIO*100))
@@ -255,7 +299,7 @@ plt.ylabel("CC")
 plt.xlabel("Sample")
 plt.legend()
 plt.tight_layout()
-plt.savefig("plots/"+desc_str+"_cc_full")
+plt.savefig("{:s}/{:s}_cc_full".format(out_folder,desc_str))
 
 """
 plt.figure()
@@ -267,7 +311,7 @@ plt.ylim((0,1))
 plt.ylabel("CC")
 plt.xlabel("Sample")
 plt.legend()
-plt.savefig("plots/"+desc_str+"_cc_full")
+plt.savefig("{:s}/{:s}_cc_full".format(out_folder,desc_str))
 """
 """
 #3d scatter plot of data
@@ -328,7 +372,7 @@ norm_illuminance -= min(norm_illuminance)
 norm_illuminance = norm_illuminance/max(norm_illuminance)*(ylims[1]-ylims[0])+ylims[0]
 plt.plot(norm_illuminance,":",label="Illuminance",alpha=0.5)
 plt.legend(loc='lower left')
-plt.savefig("plots/full_waveform_prune_comparison")
+plt.savefig("{:s}/full_waveform_prune_comparison".format(out_folder))
 
 plt.figure()
 plt.title("Pruned Region C.C.")
@@ -340,7 +384,8 @@ norm_illuminance -= min(norm_illuminance)
 norm_illuminance = norm_illuminance/max(norm_illuminance)*(ylims[1]-ylims[0])+ylims[0]
 plt.plot(norm_illuminance,":",label="Illuminance",alpha=0.5)
 plt.legend(loc='lower left')
-plt.savefig("plots/pruned_region_prune_comparison")
+plt.savefig("{:s}/pruned_region_prune_comparison".format(out_folder))
 """
+if SHOW_PLOTS:
+    plt.show()
 
-plt.show()
