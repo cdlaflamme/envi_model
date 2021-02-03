@@ -15,14 +15,14 @@ import re #regex for parsing layer strings when loading models
 SHOW_PLOTS = True
 
 USE_PAST = True
-PAST_SAMPLES = 15 #ignored if USE_PAST is false. past minutes = 2*PAST_SAMPLES
+PAST_SAMPLES = 10 #ignored if USE_PAST is false. past minutes = 2*PAST_SAMPLES
 HIDDEN_DIM = 10
 N_LAYERS = 3
 
-EPOCHS = 30000
-FULL_BATCH = True
-BATCH_SIZE = 100 #overridden if FULL_BATCH
-LEARNING_RATE = 0.00001
+EPOCHS = 70000
+FULL_BATCH = False
+BATCH_SIZE = 300 #overridden if FULL_BATCH
+LEARNING_RATE = 0.000002
 TRAIN_RATIO = 0.75 #ratio of data that is used for training (vs testing)
 TEST_RATIO = 1-TRAIN_RATIO
 PRINT_PERIOD = 1000 #every X batches we print an update w/ loss & epoch number
@@ -294,7 +294,7 @@ def test(net = None):
     ax1.set_title("LSTM Prediction CC\nTrain mean CC: {:.4f}\n Test mean CC: {:.4f}".format(np.mean(p_cc[train_indices]),np.mean(p_cc[test_indices])))
     ax1.set_ylabel("CC")
     ax2.set_ylabel("Log10 Illuminance (log Lux)")
-    ax2.set_xlabel("Sample")
+    ax1.set_xlabel("Sample")
     plt.legend((lt1,lt2,lill), ("Training CC", "Testing CC", "Illuminance"),loc="lower left")
     plt.tight_layout()
     plt.savefig("plots/"+desc_str+"_cc_full_zoomed.png")

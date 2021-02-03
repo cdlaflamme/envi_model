@@ -162,7 +162,7 @@ for seg in test_segments:
 
 ax1.set_ylabel("CC")
 ax1.set_xlabel("Sample")
-ax1.set_ylim(0.7784,1.0103)
+ax1.set_ylim(0.8125,1.0085)
 #ax1.legend(loc="lower left")
 #ylims = plt.ylim()
 norm_illuminance = np.array(env_data[:,0])
