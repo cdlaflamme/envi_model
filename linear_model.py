@@ -445,13 +445,17 @@ if REFLECTION_PLOT:
     #outline_ax.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
 
     #fig.subplots_adjust(hspace=0,wspace=0)
-    axes[0].set_xlabel("Maximum Illuminance Range [log10 Lux]")
-    axes[1].set_xlabel("Maximum Temperature Range [degrees C]")
-    axes[2].set_xlabel("Maximum Humidity Range [%]")
+    axes[0].set_xlabel("Maximum Illuminance Range [Δ log10 Lux]")
+    axes[1].set_xlabel("Maximum Temperature Range [Δ °C]")
+    axes[2].set_xlabel("Maximum Humidity Range [Δ %]")
     
     axes[0].set_xlim((0,illum_range[-1]))
     axes[1].set_xlim((0,degC_range[-1]))
     axes[2].set_xlim((0,rh_range[-1]))
+    
+    axes[0].set_yticks((0,0.1,0.2))
+    axes[1].set_yticks((0,0.1,0.2))
+    axes[2].set_yticks((0,0.1,0.2))
     
     axes[1].set_ylabel("SSTDR Variation")#don't make this too long or the subplots get squished
     
@@ -480,8 +484,10 @@ if REFLECTION_PLOT:
     text_y_padding = 0.05
     for i in range(len(axes)):
         twin = axes[i].twinx()
-        twin.set_ylim(axes[i].get_ylim())
+        twin.set_zorder(axes[i].get_zorder() -1)
+        axes[i].patch.set_visible(False)
         twin.set_yticks(np.array(fault_magnitudes)*open_norm)
+        twin.set_ylim(axes[i].get_ylim())
         twin.set_yticklabels([])
         twin.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
         twin.grid(True, which='both',axis='y')
@@ -492,7 +498,7 @@ if REFLECTION_PLOT:
         #plot label text
         for f,n in zip(norm_faults, sorted_names):
             if f < twin.get_ylim()[1]:
-                texts.append(axes[i].text(xmax+text_x_padding*xmax,f,n,va='top',ha='left')) #normalize padding
+                texts.append(axes[i].text(xmax+text_x_padding*xmax,f,n,va='center',ha='left')) #normalize padding
         #arrange label text
         r = fig.canvas.get_renderer()
         text_height = texts[0].get_window_extent(renderer=r).inverse_transformed(axes[i].transData).height #height of text in plot units, not pixels
@@ -503,12 +509,11 @@ if REFLECTION_PLOT:
                 texts[j].set_position((texts[j].get_position()[0], y))
             else:
                 y = texts[j].get_position()[1]
-            print("texts[j]: "+str(texts[j])+", y: "+str(y))
             #draw line from ytick to text
-            line = lines.Line2D((xmax,xmax+text_x_padding*xmax), (norm_faults[j],y+j*text_y_padding*ymax), lw=0.5, color='gray', alpha=1)
+            line = lines.Line2D((xmax,xmax+text_x_padding*xmax), (norm_faults[j],y), lw=0.5, color='gray', alpha=1)
             line.set_clip_on(False)
             twin.add_line(line)
-        
+
     #plt.tight_layout()
     plt.savefig("{:s}/variation_comparison.png".format(out_folder))
 
