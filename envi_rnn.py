@@ -269,7 +269,7 @@ def test(net = None):
     ax2 = ax1.twinx()
     lill, = ax2.plot(norm_illuminance,label="Illuminance",alpha=0.3,lw=1,color="C2")
     ax2.fill_between(range(N_env),norm_illuminance,np.ones(N_env)*np.min(norm_illuminance), alpha=0.2, color="C2")
-    ax2.set_title("Prediction Corr. Coeffs\n"+desc_str+'\nAverage C.C.: {:.3f}'.format(np.mean(p_cc[valid_indices])))
+    ax2.set_title("Prediction Corr. Coeffs\n"+desc_str+'\nAverage CC: {:.3f}'.format(np.mean(p_cc[valid_indices])))
     ax1.set_ylabel("CC")
     ax2.set_ylabel("Log10 Illuminance (log Lux)")
     ax2.set_xlabel("Sample")

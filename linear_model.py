@@ -1,14 +1,21 @@
 #envi_test.py
 #used to examine results more closely
 
-import torch
-import torch.nn as nn
+#import torch
+#import torch.nn as nn
 import matplotlib.pyplot as plt
+from matplotlib import lines
 import random
 import numpy as np
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d #for interpolation
+import scipy.integrate #for shaded area calculation
 
 from mpl_toolkits.mplot3d import Axes3D  # for 3d projection plots
+
+#======== PLOTTING CONFIG +=========
+FONT_SIZE = 11
+SMALL_FIG_FONT_SIZE = 15
+plt.rcParams.update({'font.size': FONT_SIZE})
 
 # ======= CONSTANTS ==========
 TRAIN_RATIO = 0.75
@@ -17,8 +24,15 @@ BIAS = True #should there be a linear bias component (i.e. an extra value of 1 i
 SHUFFLE = False #randomly select training data, CURRENTLY OBSOLETE
 SHOW_PLOTS = False
 INTERP_DATA = False #interpolates waveforms into a spline before solving
-INTERP_VISUAL = True #interpolates waveforms into a spline AFTER solving/simulating (if interp_data=True, this is ignored)
+INTERP_VISUAL = False #interpolates waveforms into a spline AFTER solving/simulating (if interp_data=True, this is ignored)
 NORMALIZE=True
+
+COMBINED_PLOT = False
+PAST_PLOT = False
+REFLECTION_PLOT = True
+
+N_simulations = 10000 #number of waveforms to generate for each factor (varied factor sampled uniformly at this many points across measured range)
+
 
 PAST_MEASUREMENTS = 15
 
@@ -27,7 +41,7 @@ METERS_PER_FOOT = 0.3048
 WF_SIZE = 92
 INTERP_SIZE = 1000
 # ======= LOAD DATA ==========
-in_path = "combined_data_new.csv"
+in_path = "combined_data.csv"
 #in_path = "combined_data_ends_1_21.csv"
 out_folder = "linear_plots"
 if (BIAS):
@@ -48,6 +62,7 @@ env_data[:,illum_index] = np.where(raw_data[:,1]==0, 0.01, raw_data[:,1]) #repla
 env_data[:,illum_index] = illum = np.log10(env_data[:,0]) #log10 illuminance
 #env_data[:,illum_index] = raw_data[1:,1] #illuminance
 env_data[:,degC_index] = degC = (raw_data[:,3]-32)*5/9 #temperature; converted to celcius
+#env_data[:,degC_index] = degC = raw_data[:,3] #temperature; left in farenheit
 env_data[:,RH_index] = RH = raw_data[:,4] #humidity
 if BIAS:
     env_data[:,bias_index] = 1
@@ -112,22 +127,12 @@ assert(N_full == len(x_full))
 desc_str = "linear_model_TR_"+str(int(TRAIN_RATIO*100))
 M = np.linalg.pinv(x_train) @ y_train
 
-lp_full = x_full @ M
-p_cc = np.zeros(N_test+N_train)
+p_full = x_full @ M
+p_cc = np.zeros(N_full)
 for i in range(N_full):
-    p_cc[i] = np.corrcoef(y_full[i], lp_full[i])[0,1]
-#plt.figure()
-#plt.plot(train_indices, p_cc[train_indices],label="Training")
-#plt.plot(test_indices, p_cc[test_indices],label="Testing")
-#plt.plot(env_data[:,0]/max(env_data[:,0]), alpha=0.5, label="Illuminance")
-#plt.title("Linear Model Prediction CC")
-#plt.ylim((0,1))
-#plt.ylabel("CC")
-#plt.xlabel("Sample")
-#plt.legend()
-#plt.tight_layout()
-#plt.savefig("{:s}/{:s}_cc_full".format(out_folder,desc_str))
+    p_cc[i] = np.corrcoef(y_full[i], p_full[i])[0,1]
 
+p_mse = np.mean((p_full-y_full)**2,axis=1)
 
 #zoomed
 #plt.figure()
@@ -151,11 +156,13 @@ ax2.set_ylabel("Log10 Illuminance (log Lux)")
 plt.legend((lt1,lt2,li),("Training CC","Testing CC","Illuminance"),loc="lower left")
 plt.title("Linear Model Prediction CC\nTrain mean CC: {:.4f}\n Test mean CC: {:.4f}".format(np.mean(p_cc[train_indices]), np.mean(p_cc[test_indices])))
 plt.tight_layout()
-plt.savefig("{:s}/{:s}_cc_full".format(out_folder,desc_str))
-ax1.set_ylim((0,1))
 plt.savefig("{:s}/{:s}_cc_full_zoomed".format(out_folder,desc_str))
+ax1.set_ylim((0,1))
+plt.savefig("{:s}/{:s}_cc_full".format(out_folder,desc_str))
+
 
 #violin plots showing environment distribution
+plt.rcParams.update({'font.size': SMALL_FIG_FONT_SIZE})
 env_sets = (illum, degC, RH)
 colors = ("#EDB120","#A2142F","#0072BD")
 names = ("Illuminance","Temperature","Humidity")
@@ -180,7 +187,7 @@ for e,c,n,u in zip(env_sets,colors,names,units):
     plt.ylabel(u)
     plt.tight_layout()
     plt.savefig("{:s}/distribution_{:s}".format(out_folder,n.lower()))
-
+plt.rcParams.update({'font.size': FONT_SIZE})
 #temperature/illuminance plot
 plt.figure()
 plt.title("Temperature and Illuminance in Measured Data")
@@ -190,7 +197,6 @@ plt.ylabel("Illuminance [log10 Lux]")
 plt.savefig("{:s}/temp_illum_comparison".format(out_folder))
 
 #=========== plotting variation from each factor ====================
-N_simulations = 10000 #number of waveforms to generate for each factor (varied factor sampled uniformly at this many points across measured range)
 
 #find mode daytime illuminance
 illum_counts, illum_centers = np.histogram(illum)
@@ -226,80 +232,328 @@ RH_I[:,degC_index] = degC_mode
 RH_I[:,RH_index] = np.linspace(np.min(RH),np.max(RH),N_simulations);
 RH_Y = RH_I @ M
 
+N_COMBINED_SIMULATIONS = 100 #we get a number of pints equal to this number CUBED
+combined_space = np.ones((N_COMBINED_SIMULATIONS,N_COMBINED_SIMULATIONS,N_COMBINED_SIMULATIONS,ENV_SIZE)) #make it 4d for now, flatten it after population
+for i,il in enumerate(np.linspace(np.min(illum),np.max(illum),N_COMBINED_SIMULATIONS)):
+    for j,dc in enumerate(np.linspace(np.min(degC),np.max(degC),N_COMBINED_SIMULATIONS)):
+        for k,rh in enumerate(np.linspace(np.min(RH),np.max(RH),N_COMBINED_SIMULATIONS)):
+            combined_space[i,j,k][illum_index] = il
+            combined_space[i,j,k][degC_index] = dc
+            combined_space[i,j,k][RH_index] = rh
+            #combined_I[i,j,k][bias_index] = 1 #done implicitly by using ones() to initialize the array
+combined_I = combined_space.reshape((-1,ENV_SIZE))
+combined_Y = combined_I @ M
+combined_N = len(combined_I) #should be N_COMBINED_SIMULATIONS**3
+assert(combined_N == N_COMBINED_SIMULATIONS**3),"Assertion failed: combined N not what expected."
+
 if INTERP_VISUAL and not INTERP_DATA:
     x = np.arange(WF_SIZE)
     xx = np.linspace(0,WF_SIZE-1,INTERP_SIZE)
     illum_Y = np.array([interp1d(x,wf,kind='cubic')(xx) for wf in illum_Y])
     degC_Y  = np.array([interp1d(x,wf,kind='cubic')(xx) for wf in degC_Y])
     RH_Y    = np.array([interp1d(x,wf,kind='cubic')(xx) for wf in RH_Y])
+    combined_Y    = np.array([interp1d(x,wf,kind='cubic')(xx) for wf in combined_Y])
 
 #each plot will share the same code. extra initial investment, but reduces headaches later.
 mode_strings = ("Illuminance: 10^{:.2f} Lux".format(illum_mode), "Temperature: {:.2f} C".format(degC_mode), "Humidity: {:.2f} %".format(RH_mode))
 lw = 1
-for i,(name,Y) in enumerate(zip(("Illuminance","Temperature","Humidity"),(illum_Y,degC_Y,RH_Y))):
-    used_m_strings = [m for j,m in enumerate(mode_strings) if i!=j]
-    fig,ax1 = plt.subplots()
-    ax1.set_title("Variation Due to {:s}\n{:s}\n{:s}".format(name,used_m_strings[0],used_m_strings[1]))
-    ax1.set_xlabel("Distance (meters)")
-    ax1.set_ylabel("Normalized SSTDR Magnitude")
-    std_devs = np.std(Y,axis=0)
-    if INTERP_DATA or INTERP_VISUAL:
-        meters = np.arange(INTERP_SIZE)*FEET_PER_SAMPLE*WF_SIZE/INTERP_SIZE*METERS_PER_FOOT
+for i,(name,Y) in enumerate(zip(("Illuminance","Temperature","Humidity","All"),(illum_Y,degC_Y,RH_Y,combined_Y))):
+    if i!=3 or COMBINED_PLOT:
+        used_m_strings = [m for j,m in enumerate(mode_strings) if i!=j and i!=3]
+        fig,ax1 = plt.subplots()
+        ax1.set_xlabel("Distance (meters)")
+        ax1.set_ylabel("Normalized SSTDR Magnitude")
+        std_devs = np.std(Y,axis=0)
+        if INTERP_DATA or INTERP_VISUAL:
+            meters = np.arange(INTERP_SIZE)*FEET_PER_SAMPLE*WF_SIZE/INTERP_SIZE*METERS_PER_FOOT
+            meters -= meters[int(np.argmax(wfs[0,:])/WF_SIZE*INTERP_SIZE)]
+        else:
+            meters = np.arange(WF_SIZE)*FEET_PER_SAMPLE*METERS_PER_FOOT
+            meters -= meters[np.argmax(wfs[0,:])]
+        mean = np.mean(Y,axis=0)
+        upper = mean+2*std_devs
+        lower = mean-2*std_devs
+        area = scipy.integrate.simps(abs(upper-lower))
+        upper_l, = ax1.plot(meters, upper,lw=lw,label="Upper Bound",color="C1")
+        mean_l,  = ax1.plot(meters,  mean,lw=lw,label="Simulated Mean",color="C0")
+        lower_l, = ax1.plot(meters, lower,lw=lw,label="Lower Bound",color="C2")
+        ax1.fill_between(x=meters,y1=upper,y2=lower,alpha=0.3)
+        ax1.legend(loc='upper right')
+        ax1.set_ylim((-1,1))
+        if i!=3: ax1.set_title("Variation Due to {:s}\n{:s}\n{:s}\nShaded Area: {:.2f}".format(name,used_m_strings[0],used_m_strings[1], area))
+        else: ax1.set_title("Variation Due to {:s}\n\n\nShaded Area: {:.2f}".format(name, area))
+        ax2 = ax1.twinx()
+        ax2.plot(meters,std_devs,lw=lw, linestyle=':',color='purple')
+        ax2.set_ylabel("Std. Dev")
+        ax2.set_ylim((0,0.5))
+        ax2.set_yticks([0.04,0.1],minor=False)
+        ax2.set_yticks(np.arange(0,0.15,0.02),minor=True)
+        ax2.yaxis.set_label_coords(1.11, 0.15)
+        ax1.set_xlim((np.min(meters),np.max(meters)))
+        ax2.set_xlim((np.min(meters),np.max(meters)))
+        #ax2.minorticks_on()
+        ax2.grid(True, which='both',axis='y')
+        plt.tight_layout()
+        plt.savefig("{:s}/variation_{:s}.png".format(out_folder,name.lower()))
+
+#CC vs environment factors plots
+illum_cc_poly = np.poly1d(np.polyfit(illum,p_cc,1))
+degC_cc_poly = np.poly1d(np.polyfit(degC,p_cc,1))
+RH_cc_poly = np.poly1d(np.polyfit(RH,p_cc,1))
+
+fig,ax1 = plt.subplots()
+ax1.scatter(illum,p_cc,marker='.',lw=0.05,color="#EDB120")
+ax1.plot(illum, illum_cc_poly(illum),"r--")
+ax1.set_title("Illuminance & CC Trend")
+ax1.set_xlabel("Illuminance [log10 Lux]")
+ax1.set_ylabel("Prediction CC")
+plt.tight_layout()
+
+plt.savefig("{0}/CC_trend_illuminance.png".format(out_folder))
+
+fig,ax1 = plt.subplots()
+ax1.scatter(degC,p_cc,marker='.',lw=0.05,color="#A2142F")
+ax1.plot(degC, degC_cc_poly(degC),"r--")
+ax1.set_title("Temperature & CC Trend")
+ax1.set_xlabel("Temperature [degrees C]")
+ax1.set_ylabel("Prediction CC")
+plt.tight_layout()
+plt.savefig("{0}/CC_trend_temperature.png".format(out_folder))
+
+fig,ax1 = plt.subplots()
+ax1.scatter(RH,p_cc,marker='.',lw=0.05,color="#0072BD")
+ax1.plot(RH, RH_cc_poly(RH),'r--')
+ax1.set_title("Humidity & CC Trend")
+ax1.set_xlabel("Relative Humidity [%]")
+ax1.set_ylabel("Prediction CC")
+plt.tight_layout()
+plt.savefig("{0}/CC_trend_humidity.png".format(out_folder))
+
+
+#error vs environment factors plots
+illum_mse_poly = np.poly1d(np.polyfit(illum,p_mse,1))
+degC_mse_poly = np.poly1d(np.polyfit(degC,p_mse,1))
+RH_mse_poly = np.poly1d(np.polyfit(RH,p_mse,1))
+ILLUM_COLOR = "#EDB120"
+DEGC_COLOR = "#A2142F"
+RH_COLOR = "#0072BD"
+
+fig,ax1 = plt.subplots()
+ax1.scatter(illum,p_mse,marker='.',lw=0.05,color=ILLUM_COLOR)
+ax1.plot(illum, illum_mse_poly(illum),"r--")
+ax1.set_title("Illuminance & MSE Trend")
+ax1.set_xlabel("Illuminance [log10 Lux]")
+ax1.set_ylabel("Prediction MSE")
+plt.tight_layout()
+plt.savefig("{0}/error_trend_illuminance.png".format(out_folder))
+
+fig,ax1 = plt.subplots()
+ax1.scatter(degC,p_mse,marker='.',lw=0.05,color=DEGC_COLOR)
+ax1.plot(degC, degC_mse_poly(degC),"r--")
+ax1.set_title("Temperature & MSE Trend")
+ax1.set_xlabel("Temperature [degrees C]")
+ax1.set_ylabel("Prediction MSE")
+plt.tight_layout()
+plt.savefig("{0}/error_trend_temperature.png".format(out_folder))
+
+fig,ax1 = plt.subplots()
+ax1.scatter(RH,p_mse,marker='.',lw=0.05,color=RH_COLOR)
+ax1.plot(RH, RH_mse_poly(RH),'r--')
+ax1.set_title("Humidity & MSE Trend")
+ax1.set_xlabel("Relative Humidity [%]")
+ax1.set_ylabel("Prediction MSE")
+plt.tight_layout()
+plt.savefig("{0}/error_trend_humidity.png".format(out_folder))
+
+
+def get_closest(array, target_value,max_dist=np.inf): #returns index with value closest to target_value, within max_dist (if provided)
+    dists = abs(array-target_value)
+    li = np.argmin(dists)
+    if dists[li] < max_dist:
+        return li
     else:
-        meters = np.arange(WF_SIZE)*FEET_PER_SAMPLE*METERS_PER_FOOT
-    mean = np.mean(Y,axis=0)
-    upper = mean+2*std_devs
-    lower = mean-2*std_devs
-    mean_l,  = ax1.plot(meters,  mean,lw=lw,label="Simulated Mean")
-    upper_l, = ax1.plot(meters, upper,lw=lw,label="Upper Bound")
-    lower_l, = ax1.plot(meters, lower,lw=lw,label="Lower Bound")
-    ax1.fill_between(x=meters,y1=upper,y2=lower,alpha=0.3)
-    ax1.legend()
-    plt.savefig("{:s}/variation_{:s}.png".format(out_folder,name.lower()))
+        return None #in another language I might return -1 but that's a valid index in python
 
+#========== fault reflection comparison plot =============
+#original idea: tiered lines
+if REFLECTION_PLOT:
+    location_meters = 60
+    location_index = get_closest(meters, location_meters) #get index of closest location
+    fig,ax1 = plt.subplots()
+    ax1.set_xlabel("Temperature [degrees C]")
+    ax1.set_ylabel("Waveform Value")
 
+    #illum_range = np.linspace(np.min(illum),np.max(illum),N_COMBINED_SIMULATIONS)
+    #rh_range    = np.linspace(np.min(RH),np.max(RH),N_COMBINED_SIMULATIONS)
+
+    degC_N = 500
+    degC_range  = np.linspace(np.min(degC),np.max(degC),degC_N)
+    illum_values = (4.5, -1.5)
+    rh_values = (0, 50, 100)
+    #illum_indices = [get_closest(illum_range, v) for v in illum_values]
+    #rh_indices = [get_closest(rh_range, v) for v in rh_values]
+    
+    reflect_space = np.ones((len(illum_values), len(rh_values), degC_N, ENV_SIZE))
+    reflect_space_Y = np.zeros((len(illum_values), len(rh_values), degC_N, WF_SIZE))
+    for j,rh_v in enumerate(rh_values):
+        for i,illum_v in enumerate(illum_values):
+            reflect_space[i,j,:,0] = illum_v
+            reflect_space[i,j,:,1] = degC_range
+            reflect_space[i,j,:,2] = rh_v
+            block = reflect_space[i,j,:] @ M
+            #block_mean = np.mean(block,axis=0)
+            reflect_space_Y[i,j,:,:] = block
+            #Y_at_point = (block-block_mean)[:,location_index]
+            Y_at_point = block[:,location_index]
+            ax1.plot(degC_range, Y_at_point, lw=lw, label="{:4.1f} RH; 10^{:.1f} Lux".format(rh_v, illum_v)) #TODO color?
+    
+    ax1.legend(loc='upper right')
+    #ax1.set_ylim((-1,1))
+    #ax1.set_xlim((np.min(degC),np.max(degC)))
+    ax1.set_title("Expected Values at {:.1f} Meters".format(meters[location_index]))
+    #TODO plot fault reflections
+    """
+    ax2 = ax1.twinx()
+    ax2.plot(meters,std_devs,lw=lw, linestyle=':',color='purple')
+    ax2.set_ylabel("Std. Dev")
+    ax2.set_ylim((0,0.5))
+    ax2.set_yticks([0.04,0.1],minor=False)
+    ax2.set_yticks(np.arange(0,0.15,0.02),minor=True)
+    ax2.yaxis.set_label_coords(1.11, 0.15)
+    ax2.set_xlim((np.min(meters),np.max(meters)))
+    """
+    #ax2.minorticks_on()
+    #ax2.grid(True, which='both',axis='y')
+    plt.tight_layout()
+    plt.savefig("{:s}/variation_reflection.png".format(out_folder))
+
+#new idea: M slope
+if REFLECTION_PLOT:
+    locations = (40, 65, 70)
+    location_indices = [get_closest(meters, l) for l in locations] #get index of closest location
+    
+    reflection_N = 500
+    samples = np.linspace(0,100,reflection_N)
+    
+    illum_range = np.linspace(0,np.max(illum)-np.min(illum),reflection_N)
+    degC_range  = np.linspace(0,np.max(degC)-np.min(degC),reflection_N)
+    rh_range    = np.linspace(0,np.max(RH)-np.min(RH),reflection_N)
+    
+    fig,axes = plt.subplots(3,1,sharey=True, constrained_layout=True)
+    #outline_ax = fig.add_subplot(111,frameon=False)
+    #outline_ax.set_ylabel("Expected Variation")
+    #outline_ax.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
+
+    #fig.subplots_adjust(hspace=0,wspace=0)
+    axes[0].set_xlabel("Maximum Illuminance Range [log10 Lux]")
+    axes[1].set_xlabel("Maximum Temperature Range [degrees C]")
+    axes[2].set_xlabel("Maximum Humidity Range [%]")
+    
+    axes[0].set_xlim((0,illum_range[-1]))
+    axes[1].set_xlim((0,degC_range[-1]))
+    axes[2].set_xlim((0,rh_range[-1]))
+    
+    axes[1].set_ylabel("SSTDR Variation")#don't make this too long or the subplots get squished
+    
+    for location_index in location_indices:
+        #plot line of slope M[n] starting at 0. each n represents a particular factor.
+        axes[0].plot(illum_range, illum_range*abs(M[0,location_index]), lw=2, label="Illum Range @ "+str(location_index))
+        axes[1].plot(degC_range, degC_range*abs(M[1,location_index]), lw=2, label="Temperature Range @ "+str(location_index))
+        axes[2].plot(rh_range, rh_range*abs(M[2,location_index]), lw=2, label="Humidity Range @ "+str(location_index))
+    
+    #ax1.legend(loc='lower right')
+    #axes[0].set_ylim((0,1))
+    #axes[1].set_ylim((0,1))
+    #axes[2].set_ylim((0,1))
+    #ax1.set_xlim((np.min(degC),np.max(degC)))
+    axes[0].set_title("Variation and Fault Magnitude")
+    #TODO plot fault reflections
+    fault_names = ("Pre-panel Open", "Broken Cell", "Arc Fault", "Ground Fault", "Post-panel Open")
+    open_norm = 0.32512 #the magnitude of an open fault reflection in OUR panel setup
+    fault_magnitudes = np.array((1.0, 0.1, 0.3, 0.15, 0.147/open_norm)) #the last one here was measured on our panels; divide by open_norm to cancel out the normalization later
+    norm_faults = fault_magnitudes*open_norm
+    fault_name_dict = dict(zip(norm_faults, fault_names))
+    norm_faults.sort()
+    sorted_names = [fault_name_dict[f] for f in norm_faults]
+    
+    text_x_padding = 0.10
+    text_y_padding = 0.05
+    for i in range(len(axes)):
+        twin = axes[i].twinx()
+        twin.set_ylim(axes[i].get_ylim())
+        twin.set_yticks(np.array(fault_magnitudes)*open_norm)
+        twin.set_yticklabels([])
+        twin.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
+        twin.grid(True, which='both',axis='y')
+        xmax = axes[i].get_xlim()[1]
+        ymax = axes[i].get_ylim()[1]
+        texts = []
+        
+        #plot label text
+        for f,n in zip(norm_faults, sorted_names):
+            if f < twin.get_ylim()[1]:
+                texts.append(axes[i].text(xmax+text_x_padding*xmax,f,n,va='top',ha='left')) #normalize padding
+        #arrange label text
+        r = fig.canvas.get_renderer()
+        text_height = texts[0].get_window_extent(renderer=r).inverse_transformed(axes[i].transData).height #height of text in plot units, not pixels
+        for j in range(len(texts)):
+            if j > 0:
+                #move text to not overlap with lower texts
+                y = max(texts[j].get_position()[1], texts[j-1].get_position()[1]+text_height+text_y_padding*ymax)
+                texts[j].set_position((texts[j].get_position()[0], y))
+            else:
+                y = texts[j].get_position()[1]
+            print("texts[j]: "+str(texts[j])+", y: "+str(y))
+            #draw line from ytick to text
+            line = lines.Line2D((xmax,xmax+text_x_padding*xmax), (norm_faults[j],y+j*text_y_padding*ymax), lw=0.5, color='gray', alpha=1)
+            line.set_clip_on(False)
+            twin.add_line(line)
+        
+    #plt.tight_layout()
+    plt.savefig("{:s}/variation_comparison.png".format(out_folder))
 
 #========== PAST-INFORMED LINEAR MODEL =============
-#advanced linear model that uses past data
-ROW_SIZE = PAST_MEASUREMENTS*ENV_SIZE
-desc_str = "advanced_linear_model_NM_"+str(PAST_MEASUREMENTS)+"_TR_"+str(int(TRAIN_RATIO*100))
+if PAST_PLOT:    
+    #advanced linear model that uses past data
+    ROW_SIZE = PAST_MEASUREMENTS*ENV_SIZE
+    desc_str = "advanced_linear_model_NM_"+str(PAST_MEASUREMENTS)+"_TR_"+str(int(TRAIN_RATIO*100))
 
 
-#this method has trouble with the dataset: the first 14,601 samples were measured 1/minute; the remainder were captured at 1/2minutes.
-#for the first 14,601 samples, use every other past sample, so the same "method" can be learned for both periods of data collection
-X_full = np.zeros((N_full, ROW_SIZE))
-skipped_measurements = PAST_MEASUREMENTS*2
-for i in range(skipped_measurements-1, N_full): #start at PAST_MEASUREMENTS*2 bc the first (this many) samples don't have enough past data
-    if (i <= N_winter):
-        #use every other past measurement as if we captured data once per two minutes instead of once per minute
-        X_full[i] = x_full[i-PAST_MEASUREMENTS*2+1:i+1:2].flatten()
-    else: #we actually captured data once per 2 minutes. no need to do anything special.
-        X_full[i] = x_full[i-PAST_MEASUREMENTS+1:i+1].flatten()
-#want to solve for MM that turns X in to Y:
-#Y = XMM
-#X.pinv Y = MM
-X_train = X_full[train_indices]
+    #this method has trouble with the dataset: the first 14,601 samples were measured 1/minute; the remainder were captured at 1/2minutes.
+    #for the first 14,601 samples, use every other past sample, so the same "method" can be learned for both periods of data collection
+    X_full = np.zeros((N_full, ROW_SIZE))
+    skipped_measurements = PAST_MEASUREMENTS*2
+    for i in range(skipped_measurements-1, N_full): #start at PAST_MEASUREMENTS*2 bc the first (this many) samples don't have enough past data
+        if (i <= N_winter):
+            #use every other past measurement as if we captured data once per two minutes instead of once per minute
+            X_full[i] = x_full[i-PAST_MEASUREMENTS*2+1:i+1:2].flatten()
+        else: #we actually captured data once per 2 minutes. no need to do anything special.
+            X_full[i] = x_full[i-PAST_MEASUREMENTS+1:i+1].flatten()
+    #want to solve for MM that turns X in to Y:
+    #Y = XMM
+    #X.pinv Y = MM
+    X_train = X_full[train_indices]
 
-MM = np.linalg.pinv(X_train) @ y_train
-l_adv_predictions_full = X_full @ MM
-l_adv_cc = np.zeros(N_full)
-for i in range(skipped_measurements-1,N_full):
-    l_adv_cc[i] = np.corrcoef(y_full[i], l_adv_predictions_full[i])[0,1]
+    MM = np.linalg.pinv(X_train) @ y_train
+    l_adv_predictions_full = X_full @ MM
+    l_adv_cc = np.zeros(N_full)
+    for i in range(skipped_measurements-1,N_full):
+        l_adv_cc[i] = np.corrcoef(y_full[i], l_adv_predictions_full[i])[0,1]
 
-plt.figure()
-plt.plot(p_cc, lw=1, label="Without Past Data")
-valid_adv_cc = l_adv_cc[skipped_measurements-1:]
-plt.plot(range(skipped_measurements-1,N_full),valid_adv_cc,lw=1,label="With Past Data")
-#ylims = plt.ylim()
-#plt.plot([border, border], [-0.5, 1.5],"r:",lw=1,label="Training Cutoff")
-#plt.ylim(ylims)
-#plt.plot(env_data[:,0]/max(env_data[:,0]), alpha=0.5, label="Illuminance")
-plt.title("Linear Model Prediction CC, Using {:d} Minutes of Data\nMean w/o past data:  {:.4f}\nMean with past data: {:.4f}".format(PAST_MEASUREMENTS*2,np.mean(p_cc), np.mean(valid_adv_cc)))
-plt.ylabel("CC")
-plt.xlabel("Sample")
-plt.legend()
-plt.tight_layout()
-plt.savefig("{:s}/{:s}_cc_full".format(out_folder,desc_str))
+    plt.figure()
+    plt.plot(p_cc, lw=1, label="Without Past Data")
+    valid_adv_cc = l_adv_cc[skipped_measurements-1:]
+    plt.plot(range(skipped_measurements-1,N_full),valid_adv_cc,lw=1,label="With Past Data")
+    #ylims = plt.ylim()
+    #plt.plot([border, border], [-0.5, 1.5],"r:",lw=1,label="Training Cutoff")
+    #plt.ylim(ylims)
+    #plt.plot(env_data[:,0]/max(env_data[:,0]), alpha=0.5, label="Illuminance")
+    plt.title("Linear Model Prediction CC, Using {:d} Minutes of Data\nMean w/o past data:  {:.4f}\nMean with past data: {:.4f}".format(PAST_MEASUREMENTS*2,np.mean(p_cc), np.mean(valid_adv_cc)))
+    plt.ylabel("CC")
+    plt.xlabel("Sample")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("{:s}/{:s}_cc_full".format(out_folder,desc_str))
 
 """
 plt.figure()
@@ -321,7 +575,7 @@ ax.scatter(x_train[:,0],x_train[:,1],x_train[:,2],label="Train",alpha=0.5)
 ax.scatter(x_test[:,0],x_test[:,1],x_test[:,2],label="Test",alpha=0.5)
 plt.title("Environmental Data Split")
 ax.set_xlabel("log10 Illuminance (log10 Lux)")
-ax.set_ylabel("Temperature (F)")
+ax.set_ylabel("Temperature (C)")
 ax.set_zlabel("Relative Humidity (%)")
 plt.legend()
 """
@@ -363,7 +617,7 @@ for i in range(N_full):
 
 
 plt.figure()
-plt.title("Full Waveform C.C.")
+plt.title("Full Waveform CC")
 plt.plot(net_cc, label="Unpruned During Training")
 plt.plot(net_p_cc, label = "Pruned During Training")
 ylims = plt.ylim((0.8,1))
@@ -375,7 +629,7 @@ plt.legend(loc='lower left')
 plt.savefig("{:s}/full_waveform_prune_comparison".format(out_folder))
 
 plt.figure()
-plt.title("Pruned Region C.C.")
+plt.title("Pruned Region CC")
 plt.plot(net_cc_p, label="Unpruned During Training")
 plt.plot(net_p_cc_p, label = "Pruned During Training")
 ylims = plt.ylim((0.8,1))
