@@ -8,31 +8,37 @@ import random
 import numpy as np
 from tkinter.filedialog import askopenfilename #file selection GUI when loading models
 import re #regex for parsing layer strings when loading models
-
-#best NN so far: lr_5e-05_ep_20000_bs_64_L_3_16_32_92_cc_full; log & pruning true
+from scheduler import *
+import traceback
+#best RNN so far: lr_5e-05_ep_20000_bs_64_L_3_16_32_92_cc_full; log & pruning true
 
 # ======= CONSTANTS ==========
 SHOW_PLOTS = True
 
-USE_PAST = True
-PAST_SAMPLES = 10 #ignored if USE_PAST is false. past minutes = 2*PAST_SAMPLES
+PAST_SAMPLES = 10 #past minutes = 2*PAST_SAMPLES
 HIDDEN_DIM = 10
 N_LAYERS = 3
 
-EPOCHS = 70000
+EPOCHS = 1000
 FULL_BATCH = False
 BATCH_SIZE = 300 #overridden if FULL_BATCH
-LEARNING_RATE = 0.000002
+LEARNING_RATE = 2e-6
+DECAY = 0.5
+DECAY_MODE = Schedule.EXP
+EPOCHS_PER_DECAY = 10 #used in step mode
+WARMUP_EPOCHS = 3
+
 TRAIN_RATIO = 0.75 #ratio of data that is used for training (vs testing)
 TEST_RATIO = 1-TRAIN_RATIO
-PRINT_PERIOD = 1000 #every X batches we print an update w/ loss & epoch number
+PRINT_PERIOD = 100 #every X batches we print an update w/ loss & epoch number
 
+LSTM = False #if false, will use a basic RNN
 LOG = True          #should we take the log10 illuminance value
 NORMALIZED = True  #should we normalized the training SSTDR waveforms
 PRUNED = False       #should we prune the static beginning portions of the training waveforms
+#OUT_ACTIVATION = True #should there be an activation function at the output (only makes sense if normalizing. Uses TanH because output is in [-1,1])
 
-prop_str = "log_"+str(LOG)[0]+"_norm_"+str(NORMALIZED)[0]+"_prune_"+str(PRUNED)[0] #string combining all the above properties to uniquely identify model & results
-param_str = "lr_"+str(LEARNING_RATE)+"_ep_"+str(EPOCHS)+"_bs_"+str(BATCH_SIZE)+"_ps_"+("0" if not USE_PAST else str(PAST_SAMPLES))
+# ======= SECONDARY CONSTANTS ======
 
 if PRUNED:
     WF_SIZE = 92-20
@@ -48,35 +54,27 @@ else:
     matplotlib.use('Agg') #this will make everything work even when there is no X server
     import matplotlib.pyplot as plt 
 
-# ======== NETWORK DEFINITION ====
-#layer_str = "L_3_24_32_64"+str(WF_SIZE) #string uniquely describing network layout, used to uniquely catalog results
-class LinearNet(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        
-        self.net = nn.Sequential(
-            nn.Linear(ENV_SIZE,24),
-            nn.ReLU(),
-            nn.Linear(24,32),
-            nn.ReLU(),
-            nn.Linear(32,64),
-            nn.ReLU(),
-            nn.Linear(64,WF_SIZE)
-        )
-    
-    def forward(self,x):
-        results = self.net(x)
-        return results
+# ======= UNIQUE STRING REPRESENTATION OF CONFIGURATION ======
 
-layer_str = "RNN_L{:d}_H{:d}".format(N_LAYERS,HIDDEN_DIM) #string uniquely describing network layout, used to uniquely catalog results
-class RNN(nn.Module):
+LAYER_STR = "RNN_L{:d}_H{:d}".format(N_LAYERS,HIDDEN_DIM)
+PROP_STR = "log_"+str(LOG)[0]+"_norm_"+str(NORMALIZED)[0]+"_prune_"+str(PRUNED)[0]+"_lstm_"+str(LSTM)[0]
+PARAM_STR = "ep_"+str(EPOCHS)+"_bs_"+str(BATCH_SIZE)+"_ps_"+str(PAST_SAMPLES)
+LEARNING_STR = "lr_"+str(LEARNING_RATE)+"_dk_"+str(DECAY)+"_mode_"+DECAY_MODE.name+"_epd_"+str(EPOCHS_PER_DECAY)+"_wue_"+str(WARMUP_EPOCHS)
+
+DESC_STR = LAYER_STR+"_"+PROP_STR+"_"+PARAM_STR+"_"+LEARNING_STR
+
+# ======== NETWORK DEFINITION ====
+class Network(nn.Module):
     def __init__(self, input_size, output_size, hidden_dim, n_layers):
-        super(RNN,self).__init__() #call base class init
+        super().__init__() #call base class init
         #store some params for later
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
         #define layers
-        self.rnn = nn.RNN(input_size,hidden_dim,n_layers,batch_first=True)
+        if LSTM:
+            self.rnn = nn.LSTM(input_size, hidden_dim, n_layers, batch_first=True)
+        else:
+            self.rnn =  nn.RNN(input_size, hidden_dim, n_layers, batch_first=True)
         self.fc = nn.Linear(hidden_dim,output_size)
         
     def forward(self,x):
@@ -90,12 +88,9 @@ class RNN(nn.Module):
         
         return out, hidden
 
-# ======== UNIQUELY IDENTIFY THIS RUN ====
-
-desc_str = param_str+"_"+layer_str+"_"+prop_str #string combining ALL properties: hyperparameters, network, preprocessing methods. used for cataloging results
-
 # ======= LOAD DATA ==========
-in_path = "combined_data_new.csv"
+print("Loading data...")
+in_path = "combined_data.csv"
 raw_data = np.genfromtxt(in_path,delimiter=',',skip_header=1)
 times = raw_data[1:,0] #timestamps of measurements
 N_env = len(times) #all measurements
@@ -127,14 +122,15 @@ if PRUNED:
 #   this totals to PAST_SAMPLES*3 fewer sets.
 
 #split data by season, and trim invalid sets (with not enough past data)
-N_winter = 14601
+N_winter = 14595
 N_summer = N_env-N_winter
 
 valid_winter_indices = np.arange(2*PAST_SAMPLES,N_winter)
 valid_summer_indices = np.arange(N_winter+PAST_SAMPLES,N_env)
 valid_indices = np.concatenate((valid_winter_indices, valid_summer_indices))
 
-winter_test_segment = np.intersect1d(np.arange(1625,1625+int(N_winter*TEST_RATIO)), valid_winter_indices) #manually split testing/training data to give each set a similar distribution
+#manually split testing/training data to give each set a similar distribution
+winter_test_segment = np.intersect1d(np.arange(1625,1625+int(N_winter*TEST_RATIO)), valid_winter_indices) 
 summer_test_segment = np.intersect1d(np.arange(36359-int(N_summer*TEST_RATIO),36359), valid_summer_indices)
 
 test_indices = np.concatenate((winter_test_segment,summer_test_segment))
@@ -173,75 +169,106 @@ assert(len(y_full) == len(X_full))
 
 # ========= TRAINING ===========
 def train():
-    X_full_tensor = torch.from_numpy(X_full).view(-1,PAST_SAMPLES,ENV_SIZE).double().cuda()
-    y_full_tensor = torch.from_numpy(y_full).view(-1,WF_SIZE).double().cuda()
-    global BATCH_SIZE
-    network = RNN(ENV_SIZE, WF_SIZE, HIDDEN_DIM, N_LAYERS) #instantiate network
-    network.double().cuda()
-    optimizer = torch.optim.Adam(network.parameters(), lr=LEARNING_RATE) #use ADAM for optimization
-    loss_func = nn.MSELoss() #use MSE objective function
-    if FULL_BATCH:
-        batches = 1
-        BATCH_SIZE = N_train
-    else:
-        batches = int(N_train/BATCH_SIZE)
-    losses = np.zeros(EPOCHS * batches) #create empty vector for tracking loss over time (for generating a learning curve)
-    l_i = 0 #crude indexing variable for loss vector
-    for epoch in range(EPOCHS):
-        #shuffle order of training data
-        random.shuffle(train_indices_s)
-        X_train_s = X_full_tensor[train_indices_s]
-        y_train_s = y_full_tensor[train_indices_s]
-        for b in range(batches):
-            #for each batch
-            #get batch of input data
-            #b_data = X_train_s[b*BATCH_SIZE:min(N_train, (b+1)*BATCH_SIZE)]
-            #b_x = torch.from_numpy(b_data).view(-1,PAST_SAMPLES,ENV_SIZE).double().cuda() #batch_size by 3 tensor
-            b_x = X_train_s[b*BATCH_SIZE:min(N_train, (b+1)*BATCH_SIZE)]
-            
-            #get batch of desired data
-            #b_desired = y_train_s[b*BATCH_SIZE:min(N_train, (b+1)*BATCH_SIZE)]
-            #b_y = torch.from_numpy(b_desired).view(-1,WF_SIZE).double().cuda() #batch size by 92 tensor
-            b_y = y_train_s[b*BATCH_SIZE:min(N_train, (b+1)*BATCH_SIZE)]
-            
-            #predict
-            #for p in range(PAST_SAMPLES):        
-            #    predictions, hidden = network(b_x[-p]) #only keep the last prediction, which uses the most recent measurement
-            predictions, hidden = network(b_x) #indexed by: index in batch, index in sequence, index in measurement
-            final_predictions = predictions.view(-1,PAST_SAMPLES,WF_SIZE).double().cuda()[:,-1,:] #take final prediction from sequence TODO: inputs may be going in in reverse order?
-            #update weights, record loss
-            loss = loss_func(final_predictions, b_y).double().cuda()
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            loss_val = loss.cpu().data.numpy().item()
-            losses[l_i] = loss_val
-            l_i+=1
-            
-            #print learning information
-            if b%PRINT_PERIOD == 0:
-                print('Epoch: ' + str(epoch) + ', loss: %.5f' % loss_val)
-
-    #loss curve from training
-    plt.figure()
-    plt.plot(np.log10(losses))
-    plt.title("Training Loss\n"+desc_str)
-    plt.xlabel("Iteration")
-    plt.ylabel("Log10 MSE Loss")
-    plt.tight_layout()
-    plt.savefig("plots/"+desc_str+"_loss.png")
-
-    #show all plots
-    if SHOW_PLOTS:
-        plt.show()
-    
-    #======= SAVE MODEL STATE ==
-    torch.save(network.state_dict(), "models/"+desc_str+"_state_dict")
-    return network, losses
-    
+    print("Training...")
+    try:
+        global BATCH_SIZE
+        #count batches
+        if FULL_BATCH:
+            n_batches = 1
+            BATCH_SIZE = N_train
+        else:
+            n_batches = int(N_train/BATCH_SIZE)
+        
+        #tensorize data
+        X_full_tensor = torch.from_numpy(X_full).view(-1,PAST_SAMPLES,ENV_SIZE).double().cuda()
+        y_full_tensor = torch.from_numpy(y_full).view(-1,WF_SIZE).double().cuda()
+        #instantiate network
+        network = Network(ENV_SIZE, WF_SIZE, HIDDEN_DIM, N_LAYERS)
+        network.double().cuda()
+        #infrastructure
+        optimizer = torch.optim.Adam(network.parameters(), lr=LEARNING_RATE) #use ADAM for optimization
+        scheduler = Scheduler(WF_SIZE, 1, WARMUP_EPOCHS*n_batches, optimizer, mode=Schedule.EXP, exp_decay=DECAY, step_count=EPOCHS_PER_DECAY*n_batches, static_lr=LEARNING_RATE)
+        loss_func = nn.MSELoss() #use MSE objective function
+        
+        losses = np.zeros(EPOCHS * n_batches) #create empty vector for tracking loss
+        learning_rates = np.zeros(EPOCHS * n_batches) #create empty vector for tracking learning rate
+        step = 0 #crude indexing variable for loss/LR vectors (stored per step, not per epoch)
+        for epoch in range(EPOCHS):
+            print("Running epoch {0}".format(epoch))
+            #shuffle order of training data
+            #indexed by: index in batch, index in sequence, index in measurement
+            random.shuffle(train_indices_s)
+            X_train_s = X_full_tensor[train_indices_s]
+            y_train_s = y_full_tensor[train_indices_s]
+            for b in range(n_batches):
+                optimizer.zero_grad()
+                #for each batch
+                #get batch of input data
+                b_x = X_train_s[b*BATCH_SIZE:min(N_train, (b+1)*BATCH_SIZE)]
+                #get batch of desired data
+                b_y = y_train_s[b*BATCH_SIZE:min(N_train, (b+1)*BATCH_SIZE)]
+                #predict
+                predictions, hidden = network(b_x)
+                #take final prediction from output sequences
+                final_predictions = predictions.view(-1,PAST_SAMPLES,WF_SIZE).double().cuda()[:,-1,:] 
+                #calculate loss, backpropagate
+                loss = loss_func(final_predictions, b_y).double().cuda()
+                loss.backward()
+                scheduler.step()
+                #store info
+                step_rate = scheduler.rate()
+                loss_val = loss.data.item()
+                losses[step] = loss_val
+                learning_rates[step] = step_rate
+                step+=1
+                
+                #print learning information
+                if b==0 or b%PRINT_PERIOD == 0:
+                    print('\tbatch {:}: loss: {:.5f}; LR: {:.2e}'.format(b, loss_val, step_rate))
+        #loss curve from training, by step
+        plt.figure()
+        loss_plot, = plt.plot(np.log10(losses))
+        plt.title("Training Loss, by Step")
+        plt.xlabel("Step [Batch]")
+        plt.ylabel("Log10 MSE Loss")
+        plt.twinx()
+        lr_plot, = plt.plot(learning_rates, color="C1", lw=1)
+        plt.ylabel("Learning Rate")
+        plt.legend((loss_plot, lr_plot), ("Loss", "Learning Rate"), loc='upper right')
+        plt.tight_layout()
+        plt.savefig("plots/"+DESC_STR+"_step_loss.png")
+        
+        #loss curve from training, by epoch
+        plt.figure()
+        step_x = np.linspace(0,EPOCHS-1,len(losses))
+        epoch_loss = np.mean(losses.reshape((EPOCHS, -1)), axis=1)
+        loss_plot, = plt.plot(np.log10(epoch_loss))
+        plt.title("Training Loss, by Epoch")
+        plt.xlabel("Epoch")
+        plt.ylabel("Log10 MSE Loss")
+        plt.twinx()
+        lr_plot, = plt.plot(step_x, learning_rates, color="C1", lw=1)
+        plt.ylabel("Learning Rate")
+        plt.legend((loss_plot, lr_plot), ("Loss", "Learning Rate"), loc='upper right')
+        plt.tight_layout()
+        plt.savefig("plots/"+DESC_STR+"_epoch_loss.png")
+        
+    except:
+        traceback.print_exc()
+    finally:    
+        #======= SAVE MODEL ======
+        network.desc_str = DESC_STR
+        network.train_losses = losses
+        network.learning_rates = learning_rates
+        torch.save(network, "models/"+DESC_STR+".sav")
+        #show plots
+        if SHOW_PLOTS:
+            plt.show()
+        return network
 
 #======= TESTING ===========
 def test(net = None):
+    print("Evaluating model...")
     if net is None:
         print("ERROR in test(): received null network object")
         return
@@ -269,13 +296,14 @@ def test(net = None):
     ax2 = ax1.twinx()
     lill, = ax2.plot(norm_illuminance,label="Illuminance",alpha=0.3,lw=1,color="C2")
     ax2.fill_between(range(N_env),norm_illuminance,np.ones(N_env)*np.min(norm_illuminance), alpha=0.2, color="C2")
-    ax2.set_title("Prediction Corr. Coeffs\n"+desc_str+'\nAverage CC: {:.3f}'.format(np.mean(p_cc[valid_indices])))
+    #ax2.set_title("Prediction Corr. Coeffs\n"+DESC_STR+'\nAverage CC: {:.3f}'.format(np.mean(p_cc[valid_indices])))
+    ax2.set_title('Prediction Corr. Coeffs\nAverage CC: {:.3f}'.format(np.mean(p_cc[valid_indices])))
     ax1.set_ylabel("CC")
     ax2.set_ylabel("Log10 Illuminance (log Lux)")
     ax2.set_xlabel("Sample")
     plt.legend((lt1,lt2,lill), ("Training CC", "Testing CC", "Illuminance"),loc="lower left")
     plt.tight_layout()
-    plt.savefig("plots/"+desc_str+"_cc_full.png")
+    plt.savefig("plots/"+DESC_STR+"_cc_full.png")
 
     #full correlation plot with illuminance, ZOOMED ON CORRELATION
     lw=1
@@ -286,7 +314,7 @@ def test(net = None):
     test_segments = np.split(test_indices,np.where(np.diff(test_indices)!=1)[0]+1)
     for seg in test_segments:
         lt2, = ax1.plot(seg, p_cc[seg], label="Testing CC",color="C1",lw=lw)
-    print("Zoomed CC Y limits: "+str(ax1.get_ylim()))
+    #print("Zoomed CC Y limits: "+str(ax1.get_ylim()))
     norm_illuminance = np.array(env_data[:,0]) #TODO use train_indices and test_indices here??
     ax2 = ax1.twinx()
     lill, = ax2.plot(norm_illuminance,label="Illuminance",alpha=0.3,lw=1,color="C2")
@@ -297,16 +325,16 @@ def test(net = None):
     ax1.set_xlabel("Sample")
     plt.legend((lt1,lt2,lill), ("Training CC", "Testing CC", "Illuminance"),loc="lower left")
     plt.tight_layout()
-    plt.savefig("plots/"+desc_str+"_cc_full_zoomed.png")
+    plt.savefig("plots/"+DESC_STR+"_cc_full_zoomed.png")
 
     #loss curve from training
     #plt.figure()
     #plt.plot(np.log10(losses))
-    #plt.title("Training Loss\n"+desc_str)
+    #plt.title("Training Loss")
     #plt.xlabel("Iteration")
     #plt.ylabel("Log10 MSE Loss")
     #plt.tight_layout()
-    #plt.savefig("plots/"+desc_str+"_loss.png")
+    #plt.savefig("plots/"+DESC_STR+"_loss.png")
     
     #plot best pair of waveforms side by side
     plt.figure()
@@ -321,6 +349,7 @@ def test(net = None):
     format_str = "i={:d}\nCC: {:.4f}\nIll.: {:.3f}, degF: {:.2f}, RH: {:.2f}\nt: {:f}"
     plt.title("Best Testing Set Pair, "+format_str.format(max_i,p_cc[max_i],env[0],env[1],env[2],times[max_i]))
     plt.tight_layout()
+    plt.savefig("plots/"+DESC_STR+"best_pair.png")
 
     #plot worst pair of waveforms side by side
     plt.figure()
@@ -334,6 +363,7 @@ def test(net = None):
     plt.xlabel("Sample")
     plt.title("Worst Testing Set Pair, "+format_str.format(min_i,p_cc[min_i],env[0],env[1],env[2],times[min_i]))
     plt.tight_layout()
+    plt.savefig("plots/"+DESC_STR+"worst_pair.png")
     
     #show all plots
     if SHOW_PLOTS:
@@ -345,12 +375,15 @@ def load_model(path = None):
     if path == '':
         print("ERROR in load_model(): Empty path to state dictionary received.")
         return
+    return torch.load(path)
+    """
     plate = re.findall("L\d+_H\d+",path)[0] #locate the layer count and hidden layer dim based on the state dictionary filename; "plate" is short for nameplate, it's just what I traditionally use in similar regex code
     layers, h_dim = [int(s) for s in re.findall("\d+",plate)] #extract the numbers themselves from this string
     network = RNN(ENV_SIZE,WF_SIZE,h_dim, layers) #instantiate a properly sized network object
     network.load_state_dict(torch.load(path))
     network.double().cuda()
     return network
+    """
     
 def exec_model(network):
     if network is None:
@@ -363,9 +396,7 @@ def exec_model(network):
     results = final_predictions.cpu().detach().numpy()
     return results
 
-        
-
 #==========================
 if __name__ == '__main__':
-    net,loss = train()
+    net = train()
     test(net)

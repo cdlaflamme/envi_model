@@ -1,5 +1,9 @@
+renogy_SSTDR
+renogy_SSTDR/*
 plots*
 models*
+models/*
+plots/*
 *.png
 *.pdn
 
