@@ -10,29 +10,30 @@ from tkinter.filedialog import askopenfilename #file selection GUI when loading 
 import re #regex for parsing layer strings when loading models
 from scheduler import *
 import traceback
-#best RNN so far: lr_5e-05_ep_20000_bs_64_L_3_16_32_92_cc_full; log & pruning true
+import datetime as dt
 
 # ======= CONSTANTS ==========
 SHOW_PLOTS = True
+PLOT_TITLES = True
 
 PAST_SAMPLES = 10 #past minutes = 2*PAST_SAMPLES
 HIDDEN_DIM = 10
-N_LAYERS = 3
+N_LAYERS = 5
 
-EPOCHS = 1000
+EPOCHS = 3
 FULL_BATCH = False
 BATCH_SIZE = 300 #overridden if FULL_BATCH
 LEARNING_RATE = 2e-6
-DECAY = 0.5
+DECAY = 0.7
 DECAY_MODE = Schedule.EXP
 EPOCHS_PER_DECAY = 10 #used in step mode
-WARMUP_EPOCHS = 3
+WARMUP = 50
 
 TRAIN_RATIO = 0.75 #ratio of data that is used for training (vs testing)
 TEST_RATIO = 1-TRAIN_RATIO
 PRINT_PERIOD = 100 #every X batches we print an update w/ loss & epoch number
 
-LSTM = False #if false, will use a basic RNN
+LSTM = True #if false, will use a basic RNN
 LOG = True          #should we take the log10 illuminance value
 NORMALIZED = True  #should we normalized the training SSTDR waveforms
 PRUNED = False       #should we prune the static beginning portions of the training waveforms
@@ -59,7 +60,7 @@ else:
 LAYER_STR = "RNN_L{:d}_H{:d}".format(N_LAYERS,HIDDEN_DIM)
 PROP_STR = "log_"+str(LOG)[0]+"_norm_"+str(NORMALIZED)[0]+"_prune_"+str(PRUNED)[0]+"_lstm_"+str(LSTM)[0]
 PARAM_STR = "ep_"+str(EPOCHS)+"_bs_"+str(BATCH_SIZE)+"_ps_"+str(PAST_SAMPLES)
-LEARNING_STR = "lr_"+str(LEARNING_RATE)+"_dk_"+str(DECAY)+"_mode_"+DECAY_MODE.name+"_epd_"+str(EPOCHS_PER_DECAY)+"_wue_"+str(WARMUP_EPOCHS)
+LEARNING_STR = "lr_"+str(LEARNING_RATE)+"_dk_"+str(DECAY)+"_mode_"+DECAY_MODE.name+"_epd_"+str(EPOCHS_PER_DECAY)+"_wu_"+str(WARMUP)
 
 DESC_STR = LAYER_STR+"_"+PROP_STR+"_"+PARAM_STR+"_"+LEARNING_STR
 
@@ -76,17 +77,22 @@ class Network(nn.Module):
         else:
             self.rnn =  nn.RNN(input_size, hidden_dim, n_layers, batch_first=True)
         self.fc = nn.Linear(hidden_dim,output_size)
+        self.init_weights()
         
     def forward(self,x):
         #initialize hidden layer
         batch_size = x.size(0)
-        hidden = torch.zeros(self.n_layers,batch_size,self.hidden_dim).double().cuda()
+        #hidden = torch.zeros(self.n_layers,batch_size,self.hidden_dim).double().cuda()
         #obtain outputs
-        out, hidden = self.rnn(x,hidden)
+        #out, hidden = self.rnn(x,hidden)
+        out, hidden = self.rnn(x)
         out = out.contiguous().view(-1,self.hidden_dim)
         out = self.fc(out)
         
         return out, hidden
+        
+    def init_weights(self):
+        pass #TODO? torch already has decent default inits.
 
 # ======= LOAD DATA ==========
 print("Loading data...")
@@ -170,6 +176,7 @@ assert(len(y_full) == len(X_full))
 # ========= TRAINING ===========
 def train():
     print("Training...")
+    print("Model: "+DESC_STR)
     try:
         global BATCH_SIZE
         #count batches
@@ -187,13 +194,14 @@ def train():
         network.double().cuda()
         #infrastructure
         optimizer = torch.optim.Adam(network.parameters(), lr=LEARNING_RATE) #use ADAM for optimization
-        scheduler = Scheduler(WF_SIZE, 1, WARMUP_EPOCHS*n_batches, optimizer, mode=Schedule.EXP, exp_decay=DECAY, step_count=EPOCHS_PER_DECAY*n_batches, static_lr=LEARNING_RATE)
+        scheduler = Scheduler(WF_SIZE, 1, WARMUP, optimizer, mode=Schedule.EXP, exp_decay=DECAY, step_count=EPOCHS_PER_DECAY*n_batches, static_lr=LEARNING_RATE)
         loss_func = nn.MSELoss() #use MSE objective function
         
         losses = np.zeros(EPOCHS * n_batches) #create empty vector for tracking loss
         learning_rates = np.zeros(EPOCHS * n_batches) #create empty vector for tracking learning rate
         step = 0 #crude indexing variable for loss/LR vectors (stored per step, not per epoch)
         for epoch in range(EPOCHS):
+            epoch_loss = 0
             print("Running epoch {0}".format(epoch))
             #shuffle order of training data
             #indexed by: index in batch, index in sequence, index in measurement
@@ -218,6 +226,7 @@ def train():
                 #store info
                 step_rate = scheduler.rate()
                 loss_val = loss.data.item()
+                epoch_loss += loss_val
                 losses[step] = loss_val
                 learning_rates[step] = step_rate
                 step+=1
@@ -225,7 +234,9 @@ def train():
                 #print learning information
                 if b==0 or b%PRINT_PERIOD == 0:
                     print('\tbatch {:}: loss: {:.5f}; LR: {:.2e}'.format(b, loss_val, step_rate))
+            print("\Epoch {:} mean loss: {:.5f}".format(epoch, epoch_loss/n_batches))
         #loss curve from training, by step
+        
         plt.figure()
         loss_plot, = plt.plot(np.log10(losses))
         plt.title("Training Loss, by Step")
@@ -236,7 +247,7 @@ def train():
         plt.ylabel("Learning Rate")
         plt.legend((loss_plot, lr_plot), ("Loss", "Learning Rate"), loc='upper right')
         plt.tight_layout()
-        plt.savefig("plots/"+DESC_STR+"_step_loss.png")
+        plt.savefig("plots/step_loss/"+DESC_STR+"_step_loss.png")
         
         #loss curve from training, by epoch
         plt.figure()
@@ -251,7 +262,7 @@ def train():
         plt.ylabel("Learning Rate")
         plt.legend((loss_plot, lr_plot), ("Loss", "Learning Rate"), loc='upper right')
         plt.tight_layout()
-        plt.savefig("plots/"+DESC_STR+"_epoch_loss.png")
+        plt.savefig("plots/epoch_loss/"+DESC_STR+"_epoch_loss.png")
         
     except:
         traceback.print_exc()
@@ -268,7 +279,9 @@ def train():
 
 #======= TESTING ===========
 def test(net = None):
+    out_folder = 'plots'
     print("Evaluating model...")
+    print(net.desc_str)
     if net is None:
         print("ERROR in test(): received null network object")
         return
@@ -282,59 +295,52 @@ def test(net = None):
         p_cc[i] = np.corrcoef(y_full[i], results[i])[0,1]
         
     #full correlation plot with illuminance
-    lw=1
-    fig,ax1 = plt.subplots()
-    train_segments = np.split(train_indices,np.where(np.diff(train_indices)!=1)[0]+1)
-    for seg in train_segments:
-        lt1, = ax1.plot(seg,p_cc[seg], label="Training CC",color="C0",lw=lw)
-    test_segments = np.split(test_indices,np.where(np.diff(test_indices)!=1)[0]+1)
-    for seg in test_segments:
-        lt2, = ax1.plot(seg, p_cc[seg], label="Testing CC",color="C1",lw=lw)
-    ylims = (0,1)
-    ax1.set_ylim(ylims)
-    norm_illuminance = np.array(env_data[:,0]) #TODO use train_indices and test_indices here??
-    ax2 = ax1.twinx()
-    lill, = ax2.plot(norm_illuminance,label="Illuminance",alpha=0.3,lw=1,color="C2")
-    ax2.fill_between(range(N_env),norm_illuminance,np.ones(N_env)*np.min(norm_illuminance), alpha=0.2, color="C2")
-    #ax2.set_title("Prediction Corr. Coeffs\n"+DESC_STR+'\nAverage CC: {:.3f}'.format(np.mean(p_cc[valid_indices])))
-    ax2.set_title('Prediction Corr. Coeffs\nAverage CC: {:.3f}'.format(np.mean(p_cc[valid_indices])))
-    ax1.set_ylabel("CC")
-    ax2.set_ylabel("Log10 Illuminance (log Lux)")
-    ax2.set_xlabel("Sample")
-    plt.legend((lt1,lt2,lill), ("Training CC", "Testing CC", "Illuminance"),loc="lower left")
-    plt.tight_layout()
-    plt.savefig("plots/"+DESC_STR+"_cc_full.png")
-
-    #full correlation plot with illuminance, ZOOMED ON CORRELATION
-    lw=1
-    fig,ax1 = plt.subplots()
-    train_segments = np.split(train_indices,np.where(np.diff(train_indices)!=1)[0]+1)
-    for seg in train_segments:
-        lt1, = ax1.plot(seg,p_cc[seg], label="Training CC",color="C0",lw=lw)
-    test_segments = np.split(test_indices,np.where(np.diff(test_indices)!=1)[0]+1)
-    for seg in test_segments:
-        lt2, = ax1.plot(seg, p_cc[seg], label="Testing CC",color="C1",lw=lw)
-    #print("Zoomed CC Y limits: "+str(ax1.get_ylim()))
-    norm_illuminance = np.array(env_data[:,0]) #TODO use train_indices and test_indices here??
-    ax2 = ax1.twinx()
-    lill, = ax2.plot(norm_illuminance,label="Illuminance",alpha=0.3,lw=1,color="C2")
-    ax2.fill_between(range(N_env),norm_illuminance,np.ones(N_env)*np.min(norm_illuminance), alpha=0.2, color="C2")
-    ax1.set_title("LSTM Prediction CC\nTrain mean CC: {:.4f}\n Test mean CC: {:.4f}".format(np.mean(p_cc[train_indices]),np.mean(p_cc[test_indices])))
-    ax1.set_ylabel("CC")
-    ax2.set_ylabel("Log10 Illuminance (log Lux)")
-    ax1.set_xlabel("Sample")
-    plt.legend((lt1,lt2,lill), ("Training CC", "Testing CC", "Illuminance"),loc="lower left")
-    plt.tight_layout()
-    plt.savefig("plots/"+DESC_STR+"_cc_full_zoomed.png")
-
-    #loss curve from training
     #plt.figure()
-    #plt.plot(np.log10(losses))
-    #plt.title("Training Loss")
-    #plt.xlabel("Iteration")
-    #plt.ylabel("Log10 MSE Loss")
-    #plt.tight_layout()
-    #plt.savefig("plots/"+DESC_STR+"_loss.png")
+    illum = env_data[:,0]
+    sample_gap = 2000 #gap between summer and winter, in samples
+    xtick_gap = 4*24*3600 #in seconds
+    cc_x = np.arange(0,N_env)
+    cc_x[N_winter:] += sample_gap
+    time_xticks = []
+    time_xticklabels = []
+    last_tick = times[0]
+    for i,t in enumerate(times):
+        if t-last_tick > xtick_gap:
+            last_tick = t
+            time_xticks.append(cc_x[i])
+            date_str = str(dt.datetime.fromtimestamp(t,dt.timezone.utc).date())
+            time_xticklabels.append(date_str)
+    lw=1
+    fig,ax1 = plt.subplots()
+    ax1.set_xticks(time_xticks)
+    ax1.set_xticklabels(time_xticklabels, rotation=45, ha='right', rotation_mode="anchor")
+    #plot training: split training set into multiple parts with borders at index discontinuities and the season border (if present). this prevents lines from being drawn across long gaps
+    train_segments = np.split(train_indices,np.where(np.logical_or(np.diff(train_indices)!=1, train_indices[1:]==N_winter))[0]+1) #index train_indices at [1:] to match size with diff results. add 1 to offset this movement
+    for seg in train_segments:
+        lt1, = ax1.plot(cc_x[seg],p_cc[seg], label="Training CC",color="C0",lw=lw)
+    #plot testing: split as training set is above
+    test_segments = np.split(test_indices,np.where(np.logical_or(np.diff(test_indices)!=1, test_indices[1:]==N_winter))[0]+1)
+    for seg in test_segments:
+        lt2, = ax1.plot(cc_x[seg], p_cc[seg], label="Testing CC",color="C1",lw=lw)
+    ax1.set_ylabel("Correlation Coefficient")
+    ax1.set_xlabel("Date")
+    ax2 = ax1.twinx()
+    #plot illuminance
+    #li, = ax2.plot(cc_x, illum,label="Illuminance",alpha=0.3, lw=1,color="C2")
+    li, = ax2.plot(cc_x[:N_winter], illum[:N_winter],label="Illuminance",alpha=0.3, lw=1,color="C2")
+    li, = ax2.plot(cc_x[N_winter:], illum[N_winter:],label="Illuminance",alpha=0.3, lw=1,color="C2")
+    #ax2.fill_between(range(N_full),illum,np.ones(N_full)*np.min(illum), alpha=0.2, color="C2")
+    ax2.fill_between(cc_x[:N_winter],illum[:N_winter],np.ones(N_winter)*np.min(illum), alpha=0.2, color="C2")
+    ax2.fill_between(cc_x[N_winter:],illum[N_winter:],np.ones(N_summer)*np.min(illum), alpha=0.2, color="C2")
+    ax2.set_ylabel("Log10 Illuminance (log Lux)")
+    plt.legend((lt1,lt2,li),("Training CC","Testing CC","Illuminance"),loc="lower left")
+    #plt.legend((lt1,lt2,li),("Training CC","Testing CC","Illuminance"),loc=(1,0))
+    if PLOT_TITLES:
+        plt.title("LSTM Model Prediction CC\nTrain mean CC: {:.4f}\n Test mean CC: {:.4f}".format(np.mean(p_cc[train_indices]), np.mean(p_cc[test_indices])))
+    plt.tight_layout()
+    plt.savefig("{:s}/cc_zoomed/{:s}_cc_full_zoomed.png".format(out_folder,net.desc_str)) #zoomed on plotted region
+    ax1.set_ylim((0,1))
+    plt.savefig("{:s}/cc_full/{:s}_cc_full.png".format(out_folder,net.desc_str)) #full 0-1 CC range
     
     #plot best pair of waveforms side by side
     plt.figure()
@@ -349,7 +355,7 @@ def test(net = None):
     format_str = "i={:d}\nCC: {:.4f}\nIll.: {:.3f}, degF: {:.2f}, RH: {:.2f}\nt: {:f}"
     plt.title("Best Testing Set Pair, "+format_str.format(max_i,p_cc[max_i],env[0],env[1],env[2],times[max_i]))
     plt.tight_layout()
-    plt.savefig("plots/"+DESC_STR+"best_pair.png")
+    plt.savefig("plots/best_pairs/"+net.desc_str+"_best_pair.png")
 
     #plot worst pair of waveforms side by side
     plt.figure()
@@ -363,7 +369,7 @@ def test(net = None):
     plt.xlabel("Sample")
     plt.title("Worst Testing Set Pair, "+format_str.format(min_i,p_cc[min_i],env[0],env[1],env[2],times[min_i]))
     plt.tight_layout()
-    plt.savefig("plots/"+DESC_STR+"worst_pair.png")
+    plt.savefig("plots/worst_pairs/"+net.desc_str+"_worst_pair.png")
     
     #show all plots
     if SHOW_PLOTS:

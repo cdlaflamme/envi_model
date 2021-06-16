@@ -24,6 +24,7 @@ TEST_RATIO = 1-TRAIN_RATIO
 BIAS = True #should there be a linear bias component (i.e. an extra value of 1 in input)
 SHUFFLE = False #randomly select training data, CURRENTLY OBSOLETE
 SHOW_PLOTS = False
+PLOT_TITLES = True
 INTERP_DATA = False #interpolates waveforms into a spline before solving
 INTERP_VISUAL = False #interpolates waveforms into a spline AFTER solving/simulating (if interp_data=True, this is ignored)
 NORMALIZE=True
@@ -162,7 +163,7 @@ for seg in train_segments:
 test_segments = np.split(test_indices,np.where(np.logical_or(np.diff(test_indices)!=1, test_indices[1:]==N_winter))[0]+1)
 for seg in test_segments:
     lt2, = ax1.plot(cc_x[seg], p_cc[seg], label="Testing CC",color="C1",lw=lw)
-ax1.set_ylabel("CC")
+ax1.set_ylabel("Correlation Coefficient")
 ax1.set_xlabel("Date")
 ax2 = ax1.twinx()
 #plot illuminance
@@ -175,7 +176,8 @@ ax2.fill_between(cc_x[N_winter:],illum[N_winter:],np.ones(N_summer)*np.min(illum
 ax2.set_ylabel("Log10 Illuminance (log Lux)")
 plt.legend((lt1,lt2,li),("Training CC","Testing CC","Illuminance"),loc="lower left")
 #plt.legend((lt1,lt2,li),("Training CC","Testing CC","Illuminance"),loc=(1,0))
-plt.title("Linear Model Prediction CC\nTrain mean CC: {:.4f}\n Test mean CC: {:.4f}".format(np.mean(p_cc[train_indices]), np.mean(p_cc[test_indices])))
+if PLOT_TITLES:
+    plt.title("Linear Model Prediction CC\nTrain mean CC: {:.4f}\n Test mean CC: {:.4f}".format(np.mean(p_cc[train_indices]), np.mean(p_cc[test_indices])))
 plt.tight_layout()
 plt.savefig("{:s}/{:s}_cc_full_zoomed".format(out_folder,desc_str)) #zoomed on plotted region
 ax1.set_ylim((0,1))
@@ -188,10 +190,11 @@ env_sets = (illum, degC, RH)
 colors = ("#EDB120","#A2142F","#0072BD")
 names = ("Illuminance","Temperature","Humidity")
 labels = ("Training Set","Testing Set","All Data")
-units = ("log10 Lux","Degrees C", "% Relative Humidity")
+units = ("Log Illuminance (log10 Lux)","Temperature (deg C)", "Relative Humidity (%)")
 for e,c,n,u in zip(env_sets,colors,names,units):
     fig,ax = plt.subplots()
-    plt.title(n+" Distribution")
+    if PLOT_TITLES:
+        plt.title(n+" Distribution")
     vp = plt.violinplot((e[train_indices], e[test_indices], e))
     for body in vp['bodies']:
         body.set_color(c)
@@ -293,7 +296,7 @@ lw = 1
 for i,(name,Y) in enumerate(zip(("Illuminance","Temperature","Humidity","All"),(illum_Y,degC_Y,RH_Y,combined_Y))):
     if i!=3 or COMBINED_PLOT:
         used_m_strings = [m for j,m in enumerate(mode_strings) if i!=j and i!=3]
-        fig,ax1 = plt.subplots(figsize=(6.4/0.63,4.8))
+        fig,ax1 = plt.subplots(figsize=(6.4/0.61,4.8))
         ax1.set_xlabel("Distance (meters)")
         ax1.set_ylabel("Normalized SSTDR Magnitude")
         std_devs = np.std(Y,axis=0)
@@ -315,7 +318,8 @@ for i,(name,Y) in enumerate(zip(("Illuminance","Temperature","Humidity","All"),(
         ax1.set_ylim((-1,1))
         #if i!=3: ax1.set_title("Variation Due to {:s}\n{:s}\n{:s}\nShaded Area: {:.2f}".format(name,used_m_strings[0],used_m_strings[1], area))
         #else: ax1.set_title("Variation Due to {:s}\n\n\nShaded Area: {:.2f}".format(name, area))
-        ax1.set_title("Variation Due to {:s}; Shaded Area = {:.2f}".format(name, area))
+        #ax1.set_title("Variation Due to {:s}; Shaded Area = {:.2f}".format(name, area))
+        plt.text(10, 0.8, "Shaded Area = {:.2f}".format(area))
         ax2 = ax1.twinx()
         ax2.plot(meters,std_devs,lw=lw, linestyle=':',color='purple')
         ax2.set_ylabel("Std. Dev")
@@ -512,7 +516,10 @@ if REFLECTION_PLOT:
     axes[1].set_yticks((0,0.2,0.4))
     axes[2].set_yticks((0,0.2,0.4))
     
+    axes[0].set_ylabel("SSTDR Variation")#don't make this too long or the subplots get squished
     axes[1].set_ylabel("SSTDR Variation")#don't make this too long or the subplots get squished
+    axes[2].set_ylabel("SSTDR Variation")#don't make this too long or the subplots get squished
+    
     handles = [None]*3
     for i,m in enumerate(M_list):
         #plot line of slope M[n] starting at 0. each n represents a particular factor.
@@ -529,7 +536,7 @@ if REFLECTION_PLOT:
     #axes[1].set_ylim((0,1))
     #axes[2].set_ylim((0,1))
     #ax1.set_xlim((np.min(degC),np.max(degC)))
-    axes[0].set_title("Variation and Fault Magnitude")
+    #axes[0].set_title("Variation and Fault Magnitude")
     #TODO plot fault reflections
     fault_names = ("Pre-panel Open", "Broken Cell", "Arc Fault", "Ground Fault", "Post-panel Open")
     open_norm = 0.32512 #the magnitude of an open fault reflection in OUR panel setup
